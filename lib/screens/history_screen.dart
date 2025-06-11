@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../models/scan_history.dart';
 import '../services/history_service.dart';
-import 'webview_screen.dart';
 
 class HistoryScreen extends StatelessWidget {
   final void Function(String url)? onUrlTap;

@@ -3,7 +3,6 @@ import 'package:qr_code_scanner/qr_code_scanner.dart';
 import '../models/scan_history.dart';
 import '../services/history_service.dart';
 import 'history_screen.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'webview_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -21,6 +20,14 @@ class _HomeScreenState extends State<HomeScreen> {
   String? scannedLink;
   String? dynamicWebUrl; // Thêm biến này
   int _selectedIndex = 1; // Tab mặc định là WebView
+
+  void _openWebView(String url) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => WebViewScreen(url: url),
+      ),
+    );
+  }
 
   void _onQRViewCreated(QRViewController controller) {
     this.controller = controller;
@@ -53,10 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 TextButton(
                   onPressed: () {
                     Navigator.of(context).pop();
-                    setState(() {
-                      dynamicWebUrl = code!;
-                      _selectedIndex = 1; // Chuyển sang tab WebView
-                    });
+                    _openWebView(code!);
                     controller.resumeCamera();
                     scanned = false;
                   },
@@ -157,10 +161,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(height: 8),
                         GestureDetector(
                           onTap: () {
-                            setState(() {
-                              dynamicWebUrl = scannedLink!;
-                              _selectedIndex = 1;
-                            });
+                            _openWebView(scannedLink!);
                           },
                           child: Text(
                             scannedLink!,
@@ -197,11 +198,12 @@ class _HomeScreenState extends State<HomeScreen> {
           // Tab 2: Lịch sử
           HistoryScreen(
             onUrlTap: (url) {
-              setState(() {
-                dynamicWebUrl = url;
-                _selectedIndex = 1;
-              });
+              _openWebView(url);
             },
+          ),
+          // Tab 3: Tài khoản (để trống)
+          const Center(
+            child: Text('Tài khoản', style: TextStyle(fontSize: 24)),
           ),
         ],
       ),
@@ -219,9 +221,14 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.history),
             label: 'Lịch sử',
           ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.account_circle),
+            label: 'Tài khoản',
+          ),
         ],
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
+        type: BottomNavigationBarType.fixed, // Thêm dòng này để hiển thị đủ 4 tab
       ),
     );
   }
