@@ -51,32 +51,9 @@ class _HomeScreenState extends State<HomeScreen> {
         });
 
         if (isUrl) {
-          showDialog(
-            context: context,
-            builder: (_) => AlertDialog(
-              title: const Text('Đã quét được link'),
-              content: Text(code ?? ''),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    _openWebView(code!);
-                    controller.resumeCamera();
-                    scanned = false;
-                  },
-                  child: const Text('Mở link'),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    controller.resumeCamera();
-                    scanned = false;
-                  },
-                  child: const Text('Đóng'),
-                ),
-              ],
-            ),
-          );
+          _openWebView(code!);
+          controller.resumeCamera();
+          scanned = false;
         } else {
           showDialog(
             context: context,
