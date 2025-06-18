@@ -3,24 +3,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/scan_history.dart';
 
 class HistoryService {
-  static const String _key = 'scan_history';
+  static const String historyKey = 'scan_history';
 
-  Future<void> saveScan(ScanHistory history) async {
+  Future<void> saveScan(ScanHistory scan) async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> histories = prefs.getStringList(_key) ?? [];
-
-    histories.add(jsonEncode(history.toJson()));
-    await prefs.setStringList(_key, histories);
+    final List<String> history = prefs.getStringList(historyKey) ?? [];
+    print('tên sản phẩm: ${scan.productName}');
+    history.insert(0, jsonEncode(scan.toJson())); // Lưu mới nhất lên đầu
+    await prefs.setStringList(historyKey, history);
   }
 
   Future<List<ScanHistory>> getHistory() async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> histories = prefs.getStringList(_key) ?? [];
-
-    return histories
-        .map((e) => ScanHistory.fromJson(jsonDecode(e)))
-        .toList()
-        .reversed
-        .toList(); // Hiển thị mới nhất lên đầu
+    final List<String> history = prefs.getStringList(historyKey) ?? [];
+    return history.map((e) => ScanHistory.fromJson(jsonDecode(e))).toList();
   }
 }

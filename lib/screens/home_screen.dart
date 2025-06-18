@@ -21,10 +21,10 @@ class _HomeScreenState extends State<HomeScreen> {
   String? dynamicWebUrl; // Thêm biến này
   int _selectedIndex = 1; // Tab mặc định là WebView
 
-  void _openWebView(String url) {
+  void _openWebView(String url, {bool callApi = false}) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => WebViewScreen(url: url),
+        builder: (_) => WebViewScreen(url: url, showAppBar: true, callApi: callApi),
       ),
     );
   }
@@ -36,12 +36,6 @@ class _HomeScreenState extends State<HomeScreen> {
         scanned = true;
         await controller.pauseCamera();
 
-        final history = ScanHistory(
-          content: scanData.code ?? '',
-          timestamp: DateTime.now(),
-        );
-        await HistoryService().saveScan(history);
-
         String? code = scanData.code;
         bool isUrl = code != null && (code.startsWith('http://') || code.startsWith('https://'));
 
@@ -51,9 +45,7 @@ class _HomeScreenState extends State<HomeScreen> {
         });
 
         if (isUrl) {
-          _openWebView(code!);
-          controller.resumeCamera();
-          scanned = false;
+          _openWebView(code!, callApi: true); // Quét QR thì callApi: true
         } else {
           showDialog(
             context: context,
@@ -171,11 +163,12 @@ class _HomeScreenState extends State<HomeScreen> {
           WebViewScreen(
             key: ValueKey(dynamicWebUrl ?? 'https://maqr.vn/vnptcheck'),
             url: dynamicWebUrl ?? 'https://maqr.vn/vnptcheck',
+            showAppBar: false,
           ),
           // Tab 2: Lịch sử
           HistoryScreen(
             onUrlTap: (url) {
-              _openWebView(url);
+              _openWebView(url, callApi: false); // Lịch sử thì callApi: false
             },
           ),
           // Tab 3: Tài khoản (để trống)

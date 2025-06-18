@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../models/scan_history.dart';
 import '../services/history_service.dart';
@@ -7,10 +8,6 @@ class HistoryScreen extends StatelessWidget {
   final HistoryService _historyService = HistoryService();
 
   HistoryScreen({super.key, this.onUrlTap});
-
-  bool _isUrl(String text) {
-    return text.startsWith('http://') || text.startsWith('https://');
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,27 +27,28 @@ class HistoryScreen extends StatelessWidget {
             itemCount: histories.length,
             itemBuilder: (_, index) {
               final h = histories[index];
-              final isUrl = _isUrl(h.content);
               return ListTile(
-                title: isUrl
-                    ? GestureDetector(
-                        onTap: () {
-                          if (isUrl) {
-                            if (onUrlTap != null) {
-                              onUrlTap!(h.content);
-                            }
-                          }
-                        },
-                        child: Text(
-                          h.content,
-                          style: const TextStyle(
-                            color: Colors.blue,
-                            decoration: TextDecoration.underline,
-                          ),
-                        ),
+                leading: h.qrImage.isNotEmpty
+                    ? Image.memory(
+                        base64Decode(h.qrImage),
+                        width: 56,
+                        height: 56,
+                        fit: BoxFit.cover,
                       )
-                    : Text(h.content),
-                subtitle: Text(h.timestamp.toString()),
+                    : const Icon(Icons.qr_code, size: 40),
+                title: Text(
+                  h.productName.isNotEmpty ? h.productName : 'Không rõ tên sản phẩm',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  'Thời gian: ${h.scannedAt.toLocal().toString().substring(0, 19)}',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                onTap: () {
+                  if (onUrlTap != null && h.url.isNotEmpty) {
+                    onUrlTap!(h.url);
+                  }
+                },
               );
             },
           );
