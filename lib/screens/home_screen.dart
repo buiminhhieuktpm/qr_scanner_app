@@ -18,8 +18,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool scanned = false;
   bool showScanner = false;
   String? scannedLink;
-  String? dynamicWebUrl; // Thêm biến này
-  int _selectedIndex = 1; // Tab mặc định là WebView
+  int _selectedIndex = 0; // 0: Home(WebView), 1: History, 2: Account
 
   void _openWebView(String url, {bool callApi = false}) {
     Navigator.of(context).push(
@@ -75,19 +74,60 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  void _startScan() {
-    setState(() {
-      showScanner = true;
-      scanned = false;
-      scannedLink = null;
-    });
-  }
-
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
       showScanner = false;
     });
+  }
+
+  Widget _buildHome() {
+    if (showScanner) {
+      return Column(
+        children: [
+          Expanded(
+            flex: 4,
+            child: QRView(
+              key: qrKey,
+              onQRViewCreated: _onQRViewCreated,
+            ),
+          ),
+          Expanded(
+            flex: 1,
+            child: Column(
+              children: [
+                const Text('Đưa mã QR vào khung để quét'),
+                const SizedBox(height: 12),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      showScanner = false;
+                      scanned = false;
+                    });
+                  },
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Quay lại'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF036337),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    } else {
+      // Chỉ còn WebView, KHÔNG còn Stack và nút "Quét" nổi nữa
+      return WebViewScreen(
+        key: const ValueKey('https://maqr.vn/vnptcheck'),
+        url: 'https://maqr.vn/vnptcheck',
+        showAppBar: false,
+      );
+    }
   }
 
   @override
@@ -99,106 +139,67 @@ class _HomeScreenState extends State<HomeScreen> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          // Tab 0: Quét QR
-          Column(
-            children: [
-              if (!showScanner) ...[
-                const Spacer(flex: 2),
-                Center(
-                  child: ElevatedButton(
-                    onPressed: _startScan,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF036337),
-                      minimumSize: const Size(200, 50),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    child: const Text(
-                      'Quét',
-                      style: TextStyle(fontSize: 20, color: Colors.white),
-                    ),
-                  ),
-                ),
-                const Spacer(flex: 2),
-                if (scannedLink != null)
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      children: [
-                        const Text('Đã quét được link:', style: TextStyle(fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 8),
-                        GestureDetector(
-                          onTap: () {
-                            _openWebView(scannedLink!);
-                          },
-                          child: Text(
-                            scannedLink!,
-                            style: const TextStyle(
-                              color: Colors.blue,
-                              decoration: TextDecoration.underline,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ] else ...[
-                Expanded(
-                  flex: 4,
-                  child: QRView(
-                    key: qrKey,
-                    onQRViewCreated: _onQRViewCreated,
-                  ),
-                ),
-                const Expanded(
-                  flex: 1,
-                  child: Center(child: Text('Đưa mã QR vào khung để quét')),
-                ),
-              ],
-            ],
-          ),
-          // Tab 1: WebView Trang chủ hoặc link động
-          WebViewScreen(
-            key: ValueKey(dynamicWebUrl ?? 'https://maqr.vn/vnptcheck'),
-            url: dynamicWebUrl ?? 'https://maqr.vn/vnptcheck',
-            showAppBar: false,
-          ),
-          // Tab 2: Lịch sử
+          _buildHome(),
           HistoryScreen(
             onUrlTap: (url) {
-              _openWebView(url, callApi: false); // Lịch sử thì callApi: false
+              _openWebView(url, callApi: false);
             },
           ),
-          // Tab 3: Tài khoản (để trống)
           const Center(
             child: Text('Tài khoản', style: TextStyle(fontSize: 24)),
           ),
         ],
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.qr_code_scanner),
-            label: 'Quét',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: 'Trang chủ',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.history),
-            label: 'Lịch sử',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.account_circle),
-            label: 'Tài khoản',
-          ),
-        ],
-        currentIndex: _selectedIndex,
-        onTap: _onItemTapped,
-        type: BottomNavigationBarType.fixed, // Thêm dòng này để hiển thị đủ 4 tab
+      bottomNavigationBar: Container(
+        color: Colors.white, // Nền trắng phủ toàn bộ vùng chứa
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_selectedIndex == 0 && !showScanner)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      showScanner = true;
+                      scanned = false;
+                    });
+                  },
+                  icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+                  label: const Text('Quét', style: TextStyle(color: Colors.white)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF036337),
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(160, 48),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: 0,
+                    shadowColor: Colors.transparent,
+                  ),
+                ),
+              ),
+            BottomNavigationBar(
+              items: const [
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.home),
+                  label: 'Trang chủ',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.history),
+                  label: 'Lịch sử',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.account_circle),
+                  label: 'Tài khoản',
+                ),
+              ],
+              currentIndex: _selectedIndex,
+              onTap: _onItemTapped,
+              type: BottomNavigationBarType.fixed,
+            ),
+          ],
+        ),
       ),
     );
   }
