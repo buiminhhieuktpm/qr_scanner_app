@@ -1,12 +1,11 @@
 // filepath: /Users/buiminhhieu/Desktop/qr_scan/qr_scanner_app/lib/screens/webview_screen.dart
 import 'dart:convert';
-import 'dart:ui' as ui;
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../services/history_service.dart';
 import '../models/scan_history.dart';
 
@@ -148,6 +147,17 @@ class _WebViewScreenState extends State<WebViewScreen> {
           : null,
       body: InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(widget.url)),
+        initialSettings: InAppWebViewSettings(
+          cacheEnabled: true,
+          useOnLoadResource: true,
+          clearCache: false,
+          sharedCookiesEnabled: true,
+          domStorageEnabled: true,
+          databaseEnabled: true, // Android: bật Web SQL Database
+          supportZoom: true,
+          mediaPlaybackRequiresUserGesture: false,
+          // iOS: các tuỳ chọn này sẽ tự động bật cache
+        ),
         onWebViewCreated: (controller) async {
           webViewController = controller;
           await loadCookies(uri);

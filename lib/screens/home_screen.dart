@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:qr_code_scanner/qr_code_scanner.dart';
-import '../models/scan_history.dart';
-import '../services/history_service.dart';
 import 'history_screen.dart';
 import 'webview_screen.dart';
 
@@ -18,7 +16,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool scanned = false;
   bool showScanner = false;
   String? scannedLink;
-  int _selectedIndex = 0; // 0: Home(WebView), 1: History, 2: Account
+  int _selectedIndex = 1; // 0: Home(WebView), 1: History, 2: Account
 
   void _openWebView(String url, {bool callApi = false}) {
     Navigator.of(context).push(
@@ -44,7 +42,7 @@ class _HomeScreenState extends State<HomeScreen> {
         });
 
         if (isUrl) {
-          _openWebView(code!, callApi: true); // Quét QR thì callApi: true
+          _openWebView(code, callApi: true); // Quét QR thì callApi: true
         } else {
           showDialog(
             context: context,
@@ -122,9 +120,9 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     } else {
       // Chỉ còn WebView, KHÔNG còn Stack và nút "Quét" nổi nữa
-      return WebViewScreen(
-        key: const ValueKey('https://maqr.vn/vnptcheck'),
-        url: 'https://maqr.vn/vnptcheck',
+      return const WebViewScreen(
+        key: ValueKey('https://maqr.vn/vnptcheck/#/app'),
+        url: 'https://maqr.vn/vnptcheck/#/app',
         showAppBar: false,
       );
     }
@@ -133,29 +131,30 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Quét QR'),
-      ),
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: [
-          _buildHome(),
-          HistoryScreen(
-            onUrlTap: (url) {
-              _openWebView(url, callApi: false);
-            },
-          ),
-          const Center(
-            child: Text('Tài khoản', style: TextStyle(fontSize: 24)),
-          ),
-        ],
+      body: SafeArea(
+        child: IndexedStack(
+          index: _selectedIndex,
+          children: [
+            HistoryScreen(
+              onUrlTap: (url) {
+                _openWebView(url, callApi: false);
+              },
+            ),
+            _buildHome(),
+            const WebViewScreen(
+              key: ValueKey('https://maqr.vn/vnptcheck/#/taikhoan'),
+              url: 'https://maqr.vn/vnptcheck/#/taikhoan',
+              showAppBar: false,
+            ),
+          ],
+        ),
       ),
       bottomNavigationBar: Container(
-        color: Colors.white, // Nền trắng phủ toàn bộ vùng chứa
+        color: Colors.white,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_selectedIndex == 0 && !showScanner)
+            if (_selectedIndex == 1 && !showScanner)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 child: ElevatedButton.icon(
@@ -165,10 +164,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       scanned = false;
                     });
                   },
-                  icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
-                  label: const Text('Quét', style: TextStyle(color: Colors.white)),
+                  
+                  label: const Text('Quét QRCode', style: TextStyle(color: Colors.white)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF036337),
+                    backgroundColor: const Color(0xFF1565C0),
                     foregroundColor: Colors.white,
                     minimumSize: const Size(160, 48),
                     shape: RoundedRectangleBorder(
@@ -182,12 +181,12 @@ class _HomeScreenState extends State<HomeScreen> {
             BottomNavigationBar(
               items: const [
                 BottomNavigationBarItem(
-                  icon: Icon(Icons.home),
-                  label: 'Trang chủ',
-                ),
-                BottomNavigationBarItem(
                   icon: Icon(Icons.history),
                   label: 'Lịch sử',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.qr_code_scanner),
+                  label: 'Quét QrCode',
                 ),
                 BottomNavigationBarItem(
                   icon: Icon(Icons.account_circle),
@@ -197,6 +196,7 @@ class _HomeScreenState extends State<HomeScreen> {
               currentIndex: _selectedIndex,
               onTap: _onItemTapped,
               type: BottomNavigationBarType.fixed,
+              selectedItemColor: const Color(0xFF1565C0), 
             ),
           ],
         ),
