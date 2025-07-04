@@ -3,17 +3,28 @@ import 'package:flutter/material.dart';
 import '../models/scan_history.dart';
 import '../services/history_service.dart';
 
-class HistoryScreen extends StatelessWidget {
+class HistoryScreen extends StatefulWidget {
   final void Function(String url)? onUrlTap;
+
+  const HistoryScreen({super.key, this.onUrlTap});
+
+  @override
+  State<HistoryScreen> createState() => _HistoryScreenState();
+}
+
+class _HistoryScreenState extends State<HistoryScreen> {
   final HistoryService _historyService = HistoryService();
 
-  HistoryScreen({super.key, this.onUrlTap});
+  Future<void> _refreshHistory() async {
+    setState(() {}); // Trigger rebuild
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Lịch sử quét'),
+        
       ),
       body: FutureBuilder<List<ScanHistory>>(
         future: _historyService.getHistory(),
@@ -45,8 +56,8 @@ class HistoryScreen extends StatelessWidget {
                   style: const TextStyle(fontSize: 13),
                 ),
                 onTap: () {
-                  if (onUrlTap != null && h.url.isNotEmpty) {
-                    onUrlTap!(h.url);
+                  if (widget.onUrlTap != null && h.url.isNotEmpty) {
+                    widget.onUrlTap!(h.url);
                   }
                 },
               );

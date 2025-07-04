@@ -1,12 +1,16 @@
-// filepath: /Users/buiminhhieu/Desktop/qr_scan/qr_scanner_app/lib/screens/webview_screen.dart
 import 'dart:convert';
+import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:geolocator/geolocator.dart';
 import '../services/history_service.dart';
+import '../services/location_service_manager.dart';
 import '../models/scan_history.dart';
 
 class WebViewScreen extends StatefulWidget {
@@ -26,10 +30,15 @@ class WebViewScreen extends StatefulWidget {
 
 class _WebViewScreenState extends State<WebViewScreen> {
   InAppWebViewController? webViewController;
+  Timer? _locationTimer;
+  bool _isCheckingLocation = false; // Cờ để tránh check location đồng thời
 
   @override
   void initState() {
     super.initState();
+    _requestPermissions(); // Yêu cầu quyền ngay khi khởi tạo
+    _startLocationTracking(); // Bắt đầu theo dõi vị trí
+    
     final uri = Uri.parse(widget.url);
     String qrcode = '';
     if (uri.fragment.isNotEmpty) {
@@ -37,9 +46,85 @@ class _WebViewScreenState extends State<WebViewScreen> {
     } else {
       qrcode = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '';
     }
+    
+    print('WebViewScreen initState - URL: ${widget.url}');
+    print('WebViewScreen initState - QR code extracted: $qrcode');
+    print('WebViewScreen initState - callApi: ${widget.callApi}');
+    
     // Chỉ call API khi mở link từ quét QR (callApi == true)
     if (qrcode.isNotEmpty && widget.callApi) {
-      fetchQrcodeInfo(qrcode);
+      print('Bắt đầu gọi API cho QR code: $qrcode');
+      // Thêm delay nhỏ để đảm bảo widget đã được khởi tạo hoàn toàn
+      Future.delayed(const Duration(milliseconds: 500), () {
+        fetchQrcodeInfo(qrcode);
+      });
+    }
+  }
+
+  // Thêm method yêu cầu quyền
+  Future<void> _requestPermissions() async {
+    // Yêu cầu quyền vị trí
+    await Permission.locationWhenInUse.request();
+    
+    // Yêu cầu quyền camera (cho QR scanner)
+    await Permission.camera.request();
+    
+    // Kiểm tra trạng thái quyền
+    final locationStatus = await Permission.locationWhenInUse.status;
+    final cameraStatus = await Permission.camera.status;
+    
+    print('Trạng thái quyền vị trí: $locationStatus');
+    print('Trạng thái quyền camera: $cameraStatus');
+    
+    // Kiểm tra xem dịch vụ vị trí có được bật không
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    print('Dịch vụ vị trí đã bật: $serviceEnabled');
+    
+    if (!serviceEnabled) {
+      print('Vui lòng bật dịch vụ vị trí');
+    }
+  }
+
+// Method để bypass SSL và gọi API
+  Future<http.Response?> _makeApiRequest(String url) async {
+    try {
+      // Thử với HTTP client thường trước
+      final normalResponse = await http.get(
+        Uri.parse(url),
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+          'Connection': 'keep-alive',
+          'Cache-Control': 'no-cache',
+        },
+      ).timeout(const Duration(seconds: 15));
+      
+      return normalResponse;
+    } catch (e) {
+      print('Normal HTTP client failed: $e');
+      
+      try {
+        // Thử với IOClient và bypass SSL
+        final httpClient = HttpClient();
+        httpClient.badCertificateCallback = (cert, host, port) => true;
+        final ioClient = IOClient(httpClient);
+        
+        final response = await ioClient.get(
+          Uri.parse(url),
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'no-cache',
+          },
+        ).timeout(const Duration(seconds: 15));
+        
+        ioClient.close();
+        return response;
+      } catch (e2) {
+        print('IOClient with SSL bypass also failed: $e2');
+        return null;
+      }
     }
   }
 
@@ -70,70 +155,254 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<String> generateQrBase64(String data) async {
-    final qrValidationResult = QrValidator.validate(
-      data: data,
-      version: QrVersions.auto,
-      errorCorrectionLevel: QrErrorCorrectLevel.L,
-    );
-    if (qrValidationResult.status == QrValidationStatus.valid) {
-      final qrCode = qrValidationResult.qrCode!;
-      final painter = QrPainter.withQr(
-        qr: qrCode,
-        color: const Color(0xFF000000),
-        emptyColor: const Color(0xFFFFFFFF),
-        gapless: true,
+    try {
+      print('generateQrBase64: Bắt đầu tạo QR cho data: $data');
+      
+      final qrValidationResult = QrValidator.validate(
+        data: data,
+        version: QrVersions.auto,
+        errorCorrectionLevel: QrErrorCorrectLevel.L,
       );
-      final picData = await painter.toImageData(300);
-      if (picData != null) {
-        final bytes = picData.buffer.asUint8List();
-        return base64Encode(bytes);
+      
+      print('generateQrBase64: Validation status: ${qrValidationResult.status}');
+      
+      if (qrValidationResult.status == QrValidationStatus.valid) {
+        final qrCode = qrValidationResult.qrCode!;
+        print('generateQrBase64: QR code created successfully');
+        
+        final painter = QrPainter.withQr(
+          qr: qrCode,
+          color: const Color(0xFF000000),
+          emptyColor: const Color(0xFFFFFFFF),
+          gapless: true,
+        );
+        
+        print('generateQrBase64: QrPainter created');
+        
+        final picData = await painter.toImageData(300);
+        if (picData != null) {
+          final bytes = picData.buffer.asUint8List();
+          final base64String = base64Encode(bytes);
+          print('generateQrBase64: Base64 generated, length: ${base64String.length}');
+          return base64String;
+        } else {
+          print('generateQrBase64: picData is null');
+        }
+      } else {
+        print('generateQrBase64: Validation failed: ${qrValidationResult.status}');
       }
+    } catch (e, stackTrace) {
+      print('generateQrBase64: Error: $e');
+      print('generateQrBase64: Stack trace: $stackTrace');
     }
     return '';
   }
 
   Future<void> fetchQrcodeInfo(String qrcode) async {
-    final apiUrl = 'https://maqr.vn/api5/vnptcheck_apiv1/qrcode/thongtinsanpham/$qrcode';
-    try {
-      final response = await http.get(Uri.parse(apiUrl));
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
+    // Ưu tiên HTTPS với URL chính xác mà bạn cung cấp
+    final urls = [
+      'https://maqr.vn/api5/vnptcheck_apiv1/qrcode/thongtinsanpham/$qrcode',
+      'http://maqr.vn/api5/vnptcheck_apiv1/qrcode/thongtinsanpham/$qrcode',
+    ];
+    
+    for (String apiUrl in urls) {
+      print('Gọi API: $apiUrl');
+      
+      try {
+        final response = await _makeApiRequest(apiUrl);
+        
+        if (response == null) {
+          print('Không thể kết nối API: $apiUrl');
+          continue;
+        }
+        
+        print('Response status: ${response.statusCode}');
+        
+        if (response.statusCode == 200) {
+          print('Response body: ${response.body}');
+          try {
+            final data = jsonDecode(response.body);
+            print('Data parsed từ API: $data');
 
-        // Tạo ảnh QR code base64
-        final qrBase64 = await generateQrBase64(qrcode);
+            // Tạo ảnh QR code base64
+            final qrBase64 = await generateQrBase64(qrcode);
+            print('QR Base64 generated: ${qrBase64.isNotEmpty ? "Success" : "Failed"}');
 
-        // Lưu lịch sử quét
-        final scanHistory = ScanHistory(
-          scannedAt: DateTime.now(),
-          productName: data['data']?['sanpham']?['data']?['ten_sanpham'] ?? '',
-          qrImage: qrBase64,
-          url: widget.url,
-        );
-        await HistoryService().saveScan(scanHistory);
+            // Lấy tên sản phẩm - thử nhiều path khác nhau
+            String productName = 'Không có tên sản phẩm';
+            
+            // Thử các path khác nhau để lấy tên sản phẩm
+            if (data['data']?['sanpham']?['data']?['ten_sanpham'] != null) {
+              productName = data['data']['sanpham']['data']['ten_sanpham'];
+            } else if (data['data']?['ten_sanpham'] != null) {
+              productName = data['data']['ten_sanpham'];
+            } else if (data['ten_sanpham'] != null) {
+              productName = data['ten_sanpham'];
+            } else if (data['product_name'] != null) {
+              productName = data['product_name'];
+            } else if (data['name'] != null) {
+              productName = data['name'];
+            }
+            
+            print('Tên sản phẩm: $productName');
 
-        // Xoá phần hiển thị dialog kiểm tra object
-        print('Object lấy được từ API: $data');
-      } else {
-        print('Lỗi API: ${response.statusCode}');
+            // Lưu lịch sử quét
+            final scanHistory = ScanHistory(
+              scannedAt: DateTime.now(),
+              productName: productName,
+              qrImage: qrBase64,
+              url: widget.url,
+            );
+            
+            print('Đang lưu lịch sử...');
+            await HistoryService().saveScan(scanHistory);
+            print('Đã lưu lịch sử thành công!');
+
+            // Hiển thị thông báo lưu thành công
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Đã lưu lịch sử: $productName'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            }
+            return; // Thành công, thoát khỏi loop
+          } catch (jsonError) {
+            print('Lỗi parse JSON: $jsonError');
+            print('Response body: ${response.body}');
+          }
+          
+        } else {
+          print('Lỗi API: ${response.statusCode}');
+          if (response.statusCode == 404) {
+            print('API URL không tồn tại: $apiUrl');
+          }
+        }
+        
+      } catch (e) {
+        print('Lỗi khi gọi API $apiUrl: $e');
       }
-    } catch (e) {
-      print('Lỗi khi gọi API: $e');
+    }
+    
+    // Nếu tất cả URL đều thất bại, lưu lịch sử với thông tin lỗi
+    print('Tất cả URL API đều thất bại, lưu lịch sử backup');
+    
+    final scanHistory = ScanHistory(
+      scannedAt: DateTime.now(),
+      productName: 'Sản phẩm (Lỗi kết nối)',
+      qrImage: '',
+      url: widget.url,
+    );
+    
+    await HistoryService().saveScan(scanHistory);
+    print('Đã lưu lịch sử backup thành công!');
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Đã lưu lịch sử (không thể lấy thông tin sản phẩm)'),
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
+  // Bắt đầu theo dõi vị trí mỗi 10 giây
+  void _startLocationTracking() {
+    // Hủy timer cũ nếu có
+    _locationTimer?.cancel();
+    
+    _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      _checkCurrentLocation();
+    });
+    
+    // Delay kiểm tra vị trí ban đầu để tránh xung đột với permission request
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        _checkCurrentLocation();
+      }
+    });
+  }
+
+  // Kiểm tra vị trí hiện tại
+  Future<void> _checkCurrentLocation() async {
+    // Tránh check location đồng thời
+    if (_isCheckingLocation) {
+      print('Location check already in progress, skipping...');
+      return;
+    }
+    
+    _isCheckingLocation = true;
+    
+    try {
+      // Kiểm tra quyền vị trí
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          print('Location permissions denied');
+          return;
+        }
+      }
+      
+      if (permission == LocationPermission.deniedForever) {
+        print('Location permissions permanently denied');
+        return;
+      }
+
+      // Kiểm tra xem dịch vụ vị trí có được bật không
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        print('WebView: Location service disabled');
+        
+        // Sử dụng LocationServiceManager để hiển thị dialog
+        if (mounted && !LocationServiceManager.isDialogShown) {
+          await LocationServiceManager.showLocationServiceDialog(context, 'WebView');
+        }
+        return;
+      }
+      
+      // Reset dialog flag khi dịch vụ vị trí đã được bật
+      LocationServiceManager.setDialogShown(false);
+
+      // Lấy vị trí hiện tại
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
+      );
+
+      // In thông tin vị trí
+      print('=== LOCATION CHECK (${DateTime.now().toString()}) ===');
+      print('Latitude: ${position.latitude}');
+      print('Longitude: ${position.longitude}');
+      print('Accuracy: ${position.accuracy} meters');
+      print('Altitude: ${position.altitude} meters');
+      print('Speed: ${position.speed} m/s');
+      print('Heading: ${position.heading}°');
+      print('Timestamp: ${position.timestamp}');
+      print('=== END LOCATION CHECK ===');
+
+    } catch (e) {
+      print('Error getting location: $e');
+    } finally {
+      _isCheckingLocation = false;
+    }
+  }
+
+
+
+
+
+  @override
+  void dispose() {
+    _locationTimer?.cancel();
+    super.dispose();
+  }
+  
   @override
   Widget build(BuildContext context) {
     final uri = Uri.parse(widget.url);
-
-    // Lấy mã sản phẩm từ cuối link
-    String qrcode = '';
-    if (uri.fragment.isNotEmpty) {
-      // Nếu có fragment (sau dấu #), lấy phần cuối
-      qrcode = uri.fragment.split('/').last;
-    } else {
-      // Nếu không có fragment, lấy phần cuối của path
-      qrcode = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '';
-    }
 
     return Scaffold(
       appBar: widget.showAppBar
@@ -165,7 +434,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
         onLoadStop: (controller, url) async {
           await saveCookies(uri);
         },
-      ), // <-- Đóng ngoặc cho InAppWebView
+      ),
+
     );
   }
 }

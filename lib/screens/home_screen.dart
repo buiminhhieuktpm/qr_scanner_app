@@ -1,5 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:qr_code_scanner/qr_code_scanner.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:geolocator/geolocator.dart';
+import '../services/location_service_manager.dart';
 import 'history_screen.dart';
 import 'webview_screen.dart';
 
@@ -17,6 +21,137 @@ class _HomeScreenState extends State<HomeScreen> {
   bool showScanner = false;
   String? scannedLink;
   int _selectedIndex = 1; // 0: Home(WebView), 1: History, 2: Account
+  Timer? _locationTimer;
+  bool _isCheckingLocation = false; // Cờ để tránh check location đồng thời
+
+  @override
+  void initState() {
+    super.initState();
+    _startLocationTracking(); // Bắt đầu theo dõi vị trí
+  }
+
+  @override
+  void dispose() {
+    _locationTimer?.cancel();
+    controller?.dispose();
+    super.dispose();
+  }
+
+  // Bắt đầu theo dõi vị trí mỗi 10 giây
+  void _startLocationTracking() {
+    _locationTimer = Timer.periodic(const Duration(seconds: 15), (timer) {
+      _checkCurrentLocation();
+    });
+    
+    // Delay kiểm tra vị trí ban đầu để tránh xung đột với permission request
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted) {
+        _checkCurrentLocation();
+      }
+    });
+  }
+
+  // Kiểm tra vị trí hiện tại
+  Future<void> _checkCurrentLocation() async {
+    // Tránh check location đồng thời
+    if (_isCheckingLocation) {
+      print('HomeScreen: Location check already in progress, skipping...');
+      return;
+    }
+    
+    _isCheckingLocation = true;
+    
+    try {
+      // Kiểm tra quyền vị trí
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          print('Location permissions denied');
+          return;
+        }
+      }
+      
+      if (permission == LocationPermission.deniedForever) {
+        print('Location permissions permanently denied');
+        return;
+      }
+
+      // Kiểm tra xem dịch vụ vị trí có được bật không
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        print('HomeScreen: Location service disabled');
+        
+        // Sử dụng LocationServiceManager để hiển thị dialog
+        if (mounted && !LocationServiceManager.isDialogShown) {
+          await LocationServiceManager.showLocationServiceDialog(context, 'HomeScreen');
+        }
+        return;
+      }
+      
+      // Reset dialog flag khi dịch vụ vị trí đã được bật
+      LocationServiceManager.setDialogShown(false);
+
+      // Lấy vị trí hiện tại
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
+      );
+
+      // In thông tin vị trí (HomeScreen)
+      print('=== HOME SCREEN LOCATION CHECK (${DateTime.now().toString()}) ===');
+      print('Latitude: ${position.latitude}');
+      print('Longitude: ${position.longitude}');
+      print('Accuracy: ${position.accuracy} meters');
+      print('Altitude: ${position.altitude} meters');
+      print('Speed: ${position.speed} m/s');
+      print('Heading: ${position.heading}°');
+      print('Timestamp: ${position.timestamp}');
+      print('=== END HOME SCREEN LOCATION CHECK ===');
+
+    } catch (e) {
+      print('HomeScreen: Error getting location: $e');
+    } finally {
+      _isCheckingLocation = false;
+    }
+  }
+
+  // Thêm method yêu cầu quyền camera và vị trí
+  Future<bool> _requestCameraPermission() async {
+    final cameraStatus = await Permission.camera.request();
+    final locationStatus = await Permission.locationWhenInUse.request();
+    
+    print('Trạng thái quyền camera: $cameraStatus');
+    print('Trạng thái quyền vị trí: $locationStatus');
+    
+    if (cameraStatus.isDenied || cameraStatus.isPermanentlyDenied) {
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Cần quyền Camera'),
+            content: const Text('Ứng dụng cần quyền truy cập camera để quét mã QR. Vui lòng cấp quyền trong cài đặt.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Hủy'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  openAppSettings();
+                },
+                child: const Text('Mở cài đặt'),
+              ),
+            ],
+          ),
+        );
+      }
+      return false;
+    }
+    
+    return true;
+  }
 
   void _openWebView(String url, {bool callApi = false}) {
     Navigator.of(context).push(
@@ -64,12 +199,6 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
     });
-  }
-
-  @override
-  void dispose() {
-    controller?.dispose();
-    super.dispose();
   }
 
   void _onItemTapped(int index) {
@@ -153,16 +282,19 @@ class _HomeScreenState extends State<HomeScreen> {
         color: Colors.white,
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_selectedIndex == 1 && !showScanner)
+          children: [              if (_selectedIndex == 1 && !showScanner)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 child: ElevatedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      showScanner = true;
-                      scanned = false;
-                    });
+                  onPressed: () async {
+                    // Yêu cầu quyền trước khi mở scanner
+                    final hasPermission = await _requestCameraPermission();
+                    if (hasPermission) {
+                      setState(() {
+                        showScanner = true;
+                        scanned = false;
+                      });
+                    }
                   },
                   
                   label: const Text('Quét QRCode', style: TextStyle(color: Colors.white)),
