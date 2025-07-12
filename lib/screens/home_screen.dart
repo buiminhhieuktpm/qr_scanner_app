@@ -4,6 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'history_screen.dart';
 import 'webview_screen.dart';
 import '../services/native_permission_service.dart';
+import '../services/location_permission_manager.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -23,6 +24,17 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _checkLocationPermissionOnStart();
+  }
+
+  // Kiểm tra và hiển thị dialog quyền vị trí khi mở app
+  Future<void> _checkLocationPermissionOnStart() async {
+    // Đợi một chút để UI render xong
+    await Future.delayed(Duration(milliseconds: 500));
+    
+    if (mounted) {
+      await LocationPermissionManager.checkAndShowPermissionDialog(context);
+    }
   }
 
   @override
