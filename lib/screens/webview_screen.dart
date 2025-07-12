@@ -9,6 +9,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/history_service.dart';
 import '../services/location_service_manager.dart';
 import '../models/scan_history.dart';
@@ -36,8 +37,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
   @override
   void initState() {
     super.initState();
-    _requestPermissions(); // Yêu cầu quyền ngay khi khởi tạo
-    _startLocationTracking(); // Bắt đầu theo dõi vị trí
+    // Chỉ kiểm tra và yêu cầu quyền vị trí dựa trên thời gian
+    _checkLocationPermissionTiming(); 
     
     final uri = Uri.parse(widget.url);
     String qrcode = '';
@@ -61,31 +62,92 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
-  // Thêm method yêu cầu quyền
-  Future<void> _requestPermissions() async {
-    // Yêu cầu quyền vị trí
-    await Permission.locationWhenInUse.request();
+  // Kiểm tra và yêu cầu quyền vị trí theo logic mới
+  Future<void> _checkLocationPermissionTiming() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasGrantedLocation = prefs.getBool('has_granted_location') ?? false;
+    final lastLocationRequestTime = prefs.getInt('last_location_request_time');
     
-    // Yêu cầu quyền camera (cho QR scanner)
-    await Permission.camera.request();
+    final now = DateTime.now().millisecondsSinceEpoch;
     
-    // Kiểm tra trạng thái quyền
-    final locationStatus = await Permission.locationWhenInUse.status;
-    final cameraStatus = await Permission.camera.status;
+    // Nếu đã cấp quyền vị trí rồi, bắt đầu tracking luôn
+    if (hasGrantedLocation) {
+      print('Đã có quyền vị trí, bắt đầu theo dõi vị trí');
+      _startLocationTracking();
+      return;
+    }
     
-    print('Trạng thái quyền vị trí: $locationStatus');
-    print('Trạng thái quyền camera: $cameraStatus');
+    // Nếu chưa từng yêu cầu quyền hoặc đã đủ 30 phút kể từ lần yêu cầu cuối
+    bool shouldRequestPermission = false;
     
-    // Kiểm tra xem dịch vụ vị trí có được bật không
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    print('Dịch vụ vị trí đã bật: $serviceEnabled');
+    if (lastLocationRequestTime == null) {
+      // Lần đầu tiên
+      print('Lần đầu mở app, yêu cầu quyền vị trí');
+      shouldRequestPermission = true;
+    } else {
+      // Kiểm tra đã đủ 30 phút chưa (30 phút = 1800000 ms)
+      final timeDiff = now - lastLocationRequestTime;
+      const thirtyMinutes = 30 * 60 * 1000;
+      
+      if (timeDiff >= thirtyMinutes) {
+        print('Đã đủ 30 phút kể từ lần yêu cầu cuối, yêu cầu quyền vị trí lại');
+        shouldRequestPermission = true;
+      } else {
+        final remainingTime = thirtyMinutes - timeDiff;
+        final remainingMinutes = (remainingTime / (60 * 1000)).round();
+        print('Còn $remainingMinutes phút nữa sẽ yêu cầu quyền vị trí lại');
+      }
+    }
     
-    if (!serviceEnabled) {
-      print('Vui lòng bật dịch vụ vị trí');
+    if (shouldRequestPermission) {
+      // Lưu thời gian yêu cầu quyền
+      await prefs.setInt('last_location_request_time', now);
+      
+      // Yêu cầu quyền
+      final granted = await _requestLocationPermission();
+      if (granted) {
+        print('User đã cấp quyền vị trí');
+        await prefs.setBool('has_granted_location', true);
+        _startLocationTracking();
+      } else {
+        print('User từ chối cấp quyền vị trí, sẽ hỏi lại sau 30 phút');
+      }
     }
   }
 
-// Method để bypass SSL và gọi API
+  // Method yêu cầu quyền vị trí và trả về kết quả
+  Future<bool> _requestLocationPermission() async {
+    try {
+      // Yêu cầu quyền vị trí
+      final locationStatus = await Permission.locationWhenInUse.request();
+      
+      print('Trạng thái quyền vị trí: $locationStatus');
+      
+      if (locationStatus.isGranted) {
+        // Kiểm tra xem dịch vụ vị trí có được bật không
+        bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        print('Dịch vụ vị trí đã bật: $serviceEnabled');
+        
+        if (!serviceEnabled) {
+          print('Dịch vụ vị trí bị tắt, yêu cầu bật');
+          if (mounted && !LocationServiceManager.isDialogShown) {
+            await LocationServiceManager.showLocationServiceDialog(context, 'WebView');
+          }
+          return false;
+        }
+        
+        return true;
+      } else {
+        print('User từ chối cấp quyền vị trí');
+        return false;
+      }
+    } catch (e) {
+      print('Lỗi khi yêu cầu quyền vị trí: $e');
+      return false;
+    }
+  }
+
+  // Method để bypass SSL và gọi API
   Future<http.Response?> _makeApiRequest(String url) async {
     try {
       // Thử với HTTP client thường trước
@@ -383,6 +445,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
       print('Timestamp: ${position.timestamp}');
       print('=== END LOCATION CHECK ===');
 
+      // Truyền vị trí vào webview
+      await _injectLocationToWebView(position);
+
     } catch (e) {
       print('Error getting location: $e');
     } finally {
@@ -390,9 +455,179 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
+  // Method để inject vị trí vào webview
+  Future<void> _injectLocationToWebView(Position position) async {
+    if (webViewController == null) {
+      print('WebViewController chưa sẵn sàng, bỏ qua inject location');
+      return;
+    }
 
+    try {
+      // Tạo JavaScript code để set location data vào window object
+      final jsCode = '''
+        // Tạo object location để webview có thể truy cập
+        window.currentLocation = {
+          latitude: ${position.latitude},
+          longitude: ${position.longitude},
+          accuracy: ${position.accuracy},
+          altitude: ${position.altitude},
+          speed: ${position.speed},
+          heading: ${position.heading},
+          timestamp: ${position.timestamp.millisecondsSinceEpoch}
+        };
+        
+        // Trigger event để thông báo có location mới
+        if (typeof window.onLocationUpdate === 'function') {
+          window.onLocationUpdate(window.currentLocation);
+        }
+        
+        // Dispatch custom event
+        window.dispatchEvent(new CustomEvent('locationUpdate', {
+          detail: window.currentLocation
+        }));
+        
+        console.log('Location updated:', window.currentLocation);
+      ''';
 
+      await webViewController!.evaluateJavascript(source: jsCode);
+      print('Đã inject vị trí vào webview: ${position.latitude}, ${position.longitude}');
+    } catch (e) {
+      print('Lỗi khi inject location vào webview: $e');
+    }
+  }
 
+  // Method để inject JavaScript helpers vào webview khi load
+  Future<void> _injectLocationHelpers() async {
+    if (webViewController == null) return;
+
+    try {
+      final jsCode = '''
+        // Helper functions để webview dễ dàng sử dụng location
+        window.getLocation = function() {
+          return window.currentLocation || null;
+        };
+        
+        window.watchLocation = function(callback) {
+          if (typeof callback === 'function') {
+            window.onLocationUpdate = callback;
+            // Gọi callback ngay lập tức nếu đã có location
+            if (window.currentLocation) {
+              callback(window.currentLocation);
+            }
+          }
+        };
+        
+        // Mock navigator.geolocation để compatibility
+        if (!navigator.geolocation) {
+          navigator.geolocation = {};
+        }
+        
+        navigator.geolocation.getCurrentPosition = function(success, error, options) {
+          if (window.currentLocation && typeof success === 'function') {
+            const position = {
+              coords: {
+                latitude: window.currentLocation.latitude,
+                longitude: window.currentLocation.longitude,
+                accuracy: window.currentLocation.accuracy,
+                altitude: window.currentLocation.altitude,
+                speed: window.currentLocation.speed,
+                heading: window.currentLocation.heading
+              },
+              timestamp: window.currentLocation.timestamp
+            };
+            success(position);
+          } else if (typeof error === 'function') {
+            error({ code: 1, message: 'Location not available' });
+          }
+        };
+        
+        navigator.geolocation.watchPosition = function(success, error, options) {
+          window.watchLocation(function(location) {
+            if (typeof success === 'function') {
+              const position = {
+                coords: {
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                  accuracy: location.accuracy,
+                  altitude: location.altitude,
+                  speed: location.speed,
+                  heading: location.heading
+                },
+                timestamp: location.timestamp
+              };
+              success(position);
+            }
+          });
+          return 1; // Mock watch ID
+        };
+        
+        navigator.geolocation.clearWatch = function(id) {
+          window.onLocationUpdate = null;
+        };
+        
+        console.log('Location helpers injected successfully');
+      ''';
+
+      await webViewController!.evaluateJavascript(source: jsCode);
+      print('Đã inject location helpers vào webview');
+    } catch (e) {
+      print('Lỗi khi inject location helpers: $e');
+    }
+  }
+
+  // Method để xử lý các URL scheme đặc biệt
+  Future<bool> _handleSpecialScheme(String url) async {
+    final uri = Uri.parse(url);
+    
+    try {
+      // Xử lý các scheme đặc biệt
+      switch (uri.scheme.toLowerCase()) {
+        case 'tel':
+          print('Đang mở ứng dụng điện thoại: $url');
+          return await launchUrl(uri, mode: LaunchMode.externalApplication);
+          
+        case 'mailto':
+          print('Đang mở ứng dụng email: $url');
+          return await launchUrl(uri, mode: LaunchMode.externalApplication);
+          
+        case 'sms':
+          print('Đang mở ứng dụng tin nhắn: $url');
+          return await launchUrl(uri, mode: LaunchMode.externalApplication);
+          
+        case 'intent':
+          print('Đang xử lý Android intent: $url');
+          // Trích xuất URL fallback từ intent nếu có
+          if (url.contains('S.browser_fallback_url=')) {
+            final fallbackMatch = RegExp(r'S\.browser_fallback_url=([^;]+)').firstMatch(url);
+            if (fallbackMatch != null) {
+              final fallbackUrl = Uri.decodeComponent(fallbackMatch.group(1)!);
+              print('Sử dụng fallback URL: $fallbackUrl');
+              if (webViewController != null) {
+                await webViewController!.loadUrl(urlRequest: URLRequest(url: WebUri(fallbackUrl)));
+                return true;
+              }
+            }
+          }
+          return false;
+          
+        case 'market':
+        case 'play':
+          print('Đang mở Google Play Store: $url');
+          return await launchUrl(uri, mode: LaunchMode.externalApplication);
+          
+        default:
+          // Cho các scheme khác, thử mở bằng ứng dụng external
+          if (uri.scheme != 'http' && uri.scheme != 'https' && uri.scheme != 'file' && uri.scheme != 'data') {
+            print('Đang thử mở scheme không hỗ trợ với ứng dụng external: ${uri.scheme}');
+            return await launchUrl(uri, mode: LaunchMode.externalApplication);
+          }
+          return false;
+      }
+    } catch (e) {
+      print('Lỗi khi xử lý scheme $url: $e');
+      return false;
+    }
+  }
 
   @override
   void dispose() {
@@ -430,9 +665,48 @@ class _WebViewScreenState extends State<WebViewScreen> {
         onWebViewCreated: (controller) async {
           webViewController = controller;
           await loadCookies(uri);
+          // Inject location helpers ngay khi webview được tạo
+          await _injectLocationHelpers();
         },
         onLoadStop: (controller, url) async {
           await saveCookies(uri);
+          // Re-inject location helpers sau khi page load xong
+          await _injectLocationHelpers();
+          // Inject vị trí hiện tại nếu có
+          if (!_isCheckingLocation) {
+            _checkCurrentLocation();
+          }
+        },
+        shouldOverrideUrlLoading: (controller, navigationAction) async {
+          final url = navigationAction.request.url.toString();
+          print('Navigation detected: $url');
+          
+          // Xử lý các scheme đặc biệt
+          final uri = Uri.parse(url);
+          if (uri.scheme != 'http' && uri.scheme != 'https') {
+            print('Detected special scheme: ${uri.scheme}');
+            final handled = await _handleSpecialScheme(url);
+            if (handled) {
+              // Ngăn webview load URL này
+              return NavigationActionPolicy.CANCEL;
+            }
+          }
+          
+          // Cho phép navigation bình thường
+          return NavigationActionPolicy.ALLOW;
+        },
+        onReceivedError: (controller, request, error) async {
+          print('WebView error: ${error.description}');
+          print('Error type: ${error.type}');
+          print('Failed URL: ${request.url}');
+          
+          // Xử lý lỗi ERR_UNKNOWN_URL_SCHEME
+          if (error.description.contains('ERR_UNKNOWN_URL_SCHEME') || 
+              error.description.contains('unknown url scheme')) {
+            final url = request.url.toString();
+            print('Handling unknown URL scheme: $url');
+            await _handleSpecialScheme(url);
+          }
         },
       ),
 

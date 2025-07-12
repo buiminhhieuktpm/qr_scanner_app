@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Location API</title>
+    <meta charset="utf-8">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f0f8ff;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .info-box {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+        .warning { color: #ffc107; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌍 Test Location API trong WebView</h1>
+        
+        <div class="info-box">
+            <h3>📍 Vị trí hiện tại:</h3>
+            <div id="location-info">
+                <p class="warning">⏳ Đang chờ vị trí...</p>
+            </div>
+        </div>
+
+        <div class="info-box">
+            <h3>🔧 Test Functions:</h3>
+            <button onclick="testGetLocation()">Test window.getLocation()</button>
+            <button onclick="testNavigatorGeo()">Test navigator.geolocation</button>
+            <button onclick="testWatchLocation()">Test watchLocation()</button>
+            <button onclick="clearResults()">Xóa kết quả</button>
+        </div>
+
+        <div class="info-box">
+            <h3>📋 Kết quả Test:</h3>
+            <div id="test-results"></div>
+        </div>
+
+        <div class="info-box">
+            <h3>📊 Location Log:</h3>
+            <div id="location-log"></div>
+        </div>
+    </div>
+
+    <script>
+        let logCount = 0;
+
+        function addLog(message, type = 'info') {
+            const log = document.getElementById('location-log');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type === 'error' ? 'error' : type === 'success' ? 'success' : '';
+            log.innerHTML += `<div class="${className}">[${timestamp}] ${message}</div>`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function addResult(message, type = 'info') {
+            const results = document.getElementById('test-results');
+            const className = type === 'error' ? 'error' : type === 'success' ? 'success' : '';
+            results.innerHTML += `<div class="${className}">✓ ${message}</div>`;
+        }
+
+        function updateLocationDisplay(location) {
+            if (location) {
+                document.getElementById('location-info').innerHTML = `
+                    <p class="success">✅ Có vị trí!</p>
+                    <p><strong>Latitude:</strong> ${location.latitude.toFixed(6)}</p>
+                    <p><strong>Longitude:</strong> ${location.longitude.toFixed(6)}</p>
+                    <p><strong>Độ chính xác:</strong> ${location.accuracy.toFixed(1)} mét</p>
+                    <p><strong>Thời gian:</strong> ${new Date(location.timestamp).toLocaleString()}</p>
+                `;
+            } else {
+                document.getElementById('location-info').innerHTML = '<p class="error">❌ Không có vị trí</p>';
+            }
+        }
+
+        function testGetLocation() {
+            addLog('Testing window.getLocation()...');
+            try {
+                const location = window.getLocation();
+                if (location) {
+                    addResult('window.getLocation() hoạt động!', 'success');
+                    addLog(`Got location: ${location.latitude}, ${location.longitude}`, 'success');
+                    updateLocationDisplay(location);
+                } else {
+                    addResult('window.getLocation() trả về null', 'error');
+                    addLog('window.getLocation() returned null', 'error');
+                }
+            } catch (e) {
+                addResult(`window.getLocation() lỗi: ${e.message}`, 'error');
+                addLog(`window.getLocation() error: ${e.message}`, 'error');
+            }
+        }
+
+        function testNavigatorGeo() {
+            addLog('Testing navigator.geolocation.getCurrentPosition()...');
+            try {
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(
+                        function(position) {
+                            addResult('navigator.geolocation hoạt động!', 'success');
+                            addLog(`Navigator geo: ${position.coords.latitude}, ${position.coords.longitude}`, 'success');
+                        },
+                        function(error) {
+                            addResult(`navigator.geolocation lỗi: ${error.message}`, 'error');
+                            addLog(`Navigator geo error: ${error.message}`, 'error');
+                        }
+                    );
+                } else {
+                    addResult('navigator.geolocation không có sẵn', 'error');
+                    addLog('navigator.geolocation not available', 'error');
+                }
+            } catch (e) {
+                addResult(`navigator.geolocation lỗi: ${e.message}`, 'error');
+                addLog(`Navigator geo error: ${e.message}`, 'error');
+            }
+        }
+
+        function testWatchLocation() {
+            addLog('Testing window.watchLocation()...');
+            try {
+                if (window.watchLocation) {
+                    window.watchLocation(function(location) {
+                        addResult('window.watchLocation() hoạt động!', 'success');
+                        addLog(`Watch location: ${location.latitude}, ${location.longitude}`, 'success');
+                        updateLocationDisplay(location);
+                    });
+                } else {
+                    addResult('window.watchLocation() không có sẵn', 'error');
+                    addLog('window.watchLocation() not available', 'error');
+                }
+            } catch (e) {
+                addResult(`window.watchLocation() lỗi: ${e.message}`, 'error');
+                addLog(`Watch location error: ${e.message}`, 'error');
+            }
+        }
+
+        function clearResults() {
+            document.getElementById('test-results').innerHTML = '';
+            document.getElementById('location-log').innerHTML = '';
+        }
+
+        // Auto update location display
+        function updateLocation() {
+            const location = window.getLocation();
+            updateLocationDisplay(location);
+        }
+
+        // Check location every 2 seconds
+        setInterval(updateLocation, 2000);
+
+        // Listen for location updates
+        window.addEventListener('locationUpdate', function(event) {
+            addLog('Received location update event', 'success');
+            updateLocationDisplay(event.detail);
+        });
+
+        // Initial check
+        setTimeout(updateLocation, 1000);
+        addLog('Test page loaded, waiting for location...');
+    </script>
+</body>
+</html>
