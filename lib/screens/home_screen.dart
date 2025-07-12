@@ -3,6 +3,7 @@ import 'package:qr_code_scanner/qr_code_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'history_screen.dart';
 import 'webview_screen.dart';
+import '../services/native_permission_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -30,39 +31,79 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  // Thêm method yêu cầu quyền camera
+  // Thêm method kiểm tra và yêu cầu quyền camera
   Future<bool> _requestCameraPermission() async {
-    final cameraStatus = await Permission.camera.request();
-    
-    print('Trạng thái quyền camera: $cameraStatus');
-    
-    if (cameraStatus.isDenied || cameraStatus.isPermanentlyDenied) {
-      if (mounted) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Cần quyền Camera'),
-            content: const Text('Ứng dụng cần quyền truy cập camera để quét mã QR. Vui lòng cấp quyền trong cài đặt.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Hủy'),
-              ),
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  openAppSettings();
-                },
-                child: const Text('Mở cài đặt'),
-              ),
-            ],
-          ),
-        );
+    try {
+      print('=== TRYING NATIVE iOS CAMERA PERMISSION ===');
+      
+      // Thử native iOS method trước
+      final nativeStatus = await NativePermissionService.getCameraPermissionStatus();
+      print('🎯 Native camera status: $nativeStatus');
+      
+      if (nativeStatus == 'authorized') {
+        print('✅ Native camera permission already granted');
+        return true;
       }
+      
+      if (nativeStatus == 'notDetermined') {
+        print('🎯 Requesting native camera permission...');
+        final granted = await NativePermissionService.requestCameraPermissionNative();
+        print('🎯 Native permission result: $granted');
+        if (granted) return true;
+      }
+      
+      // Fallback to permission_handler
+      print('=== FALLBACK TO PERMISSION_HANDLER ===');
+      final currentStatus = await Permission.camera.status;
+      print('📱 Permission handler status: $currentStatus');
+      
+      if (currentStatus.isGranted) {
+        return true;
+      }
+      
+      // Force request permission 
+      print('📱 Force requesting permission...');
+      final requestedStatus = await Permission.camera.request();
+      print('📱 Permission result: $requestedStatus');
+      
+      if (requestedStatus.isGranted) {
+        print('✅ Permission granted via permission_handler');
+        return true;
+      }
+      
+      // Show error dialog
+      if (requestedStatus.isDenied || requestedStatus.isPermanentlyDenied) {
+        print('❌ Camera permission denied');
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Cần quyền Camera'),
+              content: Text('Quyền camera bị từ chối.\n\nCách cấp quyền:\n1. Vào Cài đặt iPhone\n2. Tìm app "QR Scanner App"\n3. Bật Camera\n\nHoặc vào: Cài đặt > Quyền riêng tư & Bảo mật > Camera'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Hủy'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    openAppSettings();
+                  },
+                  child: const Text('Mở cài đặt'),
+                ),
+              ],
+            ),
+          );
+        }
+        return false;
+      }
+      
+      return false;
+    } catch (e) {
+      print('❌ Lỗi khi request camera permission: $e');
       return false;
     }
-    
-    return true;
   }
 
   void _openWebView(String url, {bool callApi = false}) {
