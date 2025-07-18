@@ -15,19 +15,27 @@ class LocationPermissionManager {
   static bool _isRequestingPermission = false;
 
   /// Khởi tạo manager khi app mở
-  static Future<void> initialize() async {
+  static Future<String?> initialize() async {
     await _updateLastAppOpenTime();
     
     // Kiểm tra quyền ngay khi mở app
     if (Platform.isAndroid) {
       await _checkAndRequestPermissionAndroid();
+      return null;
     } else if (Platform.isIOS) {
       // Force request cho iOS để popup hiển thị ngay lập tức
-      await forceRequestLocationPermissionIOS();
+      final result = await forceRequestLocationPermissionIOS();
+      print('🍎 [iOS INIT] Kết quả force request: $result');
+      
+      // Thiết lập timer định kỳ kiểm tra (mỗi 30 phút)
+      _startPeriodicCheck();
+      
+      return result; // Trả về kết quả để UI có thể xử lý
     }
     
     // Thiết lập timer định kỳ kiểm tra (mỗi 30 phút)
     _startPeriodicCheck();
+    return null;
   }
 
   /// Cập nhật thời gian mở app cuối cùng
@@ -107,7 +115,11 @@ class LocationPermissionManager {
       
       if (nativeStatus == 'denied') {
         print('🍎 [iOS] ❌ Native quyền bị từ chối - cần hướng dẫn vào Settings');
-        // Sẽ hiển thị dialog từ UI layer
+        // Sẽ hiển thị dialog từ UI layer - chỉ khi đã qua 30 phút hoặc mở app lần tiếp theo
+        if (await _shouldRequestPermission()) {
+          print('🍎 [iOS] 📝 Đã đủ thời gian - cần hiển thị dialog hướng dẫn');
+          // Logic hiển thị dialog sẽ được xử lý ở UI layer
+        }
         return;
       }
       
@@ -226,8 +238,8 @@ class LocationPermissionManager {
   }
 
   /// Force request quyền vị trí ngay lập tức cho iOS (không kiểm tra thời gian)
-  static Future<void> forceRequestLocationPermissionIOS() async {
-    if (_isRequestingPermission) return;
+  static Future<String> forceRequestLocationPermissionIOS() async {
+    if (_isRequestingPermission) return 'busy';
     
     try {
       _isRequestingPermission = true;
@@ -239,12 +251,12 @@ class LocationPermissionManager {
       
       if (nativeStatus == 'authorized' || nativeStatus == 'authorizedWhenInUse') {
         print('🍎 [iOS FORCE] ✅ Đã có quyền vị trí');
-        return;
+        return 'granted';
       }
       
       if (nativeStatus == 'denied') {
-        print('🍎 [iOS FORCE] ❌ Quyền bị từ chối');
-        return;
+        print('🍎 [iOS FORCE] ❌ Quyền bị từ chối - sẽ hiển thị dialog sau 30p hoặc lần mở app tiếp theo');
+        return 'granted'; // Trả về 'granted' để không hiển thị popup ngay lập tức
       }
       
       // Force request nếu chưa xác định
@@ -255,12 +267,17 @@ class LocationPermissionManager {
         
         if (granted) {
           print('🍎 [iOS FORCE] ✅ Native cấp quyền thành công!');
+          return 'granted';
         } else {
-          print('🍎 [iOS FORCE] ❌ Native từ chối quyền');
+          print('🍎 [iOS FORCE] ❌ Native từ chối quyền - sẽ hiển thị dialog sau 30p hoặc lần mở app tiếp theo');
+          return 'granted'; // Trả về 'granted' để không hiển thị popup ngay lập tức
         }
       }
+      
+      return 'unknown';
     } catch (e) {
       print('🍎 [iOS FORCE] 💥 Lỗi: $e');
+      return 'error';
     } finally {
       _isRequestingPermission = false;
     }
@@ -271,8 +288,15 @@ class LocationPermissionManager {
     final nativeStatus = await NativePermissionService.getLocationPermissionStatus();
     print('🔍 Kiểm tra quyền để hiển thị dialog - Native status: $nativeStatus');
     
-    if (nativeStatus == 'denied' || nativeStatus == 'restricted') {
+    // Chỉ hiển thị dialog nếu quyền bị từ chối VÀ đã đủ thời gian (30 phút)
+    if ((nativeStatus == 'denied' || nativeStatus == 'restricted') && 
+        await _shouldRequestPermission()) {
+      print('🔍 Đã đủ thời gian, hiển thị dialog hướng dẫn');
       await PermissionDialogService.showLocationPermissionDialog(context);
+      // Cập nhật thời gian để không hiển thị liên tục
+      await _updateLastRequestTime();
+    } else if (nativeStatus == 'denied' || nativeStatus == 'restricted') {
+      print('🔍 Chưa đủ 30 phút, không hiển thị dialog');
     }
   }
 }
