@@ -9,7 +9,10 @@ class NativePermissionService {
       final bool result = await _channel.invokeMethod('requestCameraPermission');
       return result;
     } on PlatformException catch (e) {
-      print("Failed to request camera permission: '${e.message}'.");
+      print("❌ Lỗi khi request camera permission: ${e.toString()}");
+      return false;
+    } catch (e) {
+      print("❌ Lỗi không xác định khi request camera permission: ${e.toString()}");
       return false;
     }
   }
@@ -19,7 +22,10 @@ class NativePermissionService {
       final String result = await _channel.invokeMethod('getCameraPermissionStatus');
       return result;
     } on PlatformException catch (e) {
-      print("Failed to get camera permission status: '${e.message}'.");
+      print("❌ Lỗi khi request camera permission: ${e.toString()}");
+      return 'unknown';
+    } catch (e) {
+      print("❌ Lỗi không xác định khi request camera permission: ${e.toString()}");
       return 'unknown';
     }
   }

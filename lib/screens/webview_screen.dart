@@ -11,6 +11,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/history_service.dart';
 import '../services/location_permission_manager.dart';
+import '../services/global_cookie_manager.dart';
 import '../models/scan_history.dart';
 
 class WebViewScreen extends StatefulWidget {
@@ -32,10 +33,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
   InAppWebViewController? webViewController;
   Timer? _locationTimer;
   bool _isCheckingLocation = false; // Cờ để tránh check location đồng thời
+  final GlobalCookieManager _globalCookieManager = GlobalCookieManager();
 
   @override
   void initState() {
     super.initState();
+    
+    // Load global cookies trước khi khởi tạo WebView
+    _initializeGlobalCookies();
     
     // Kiểm tra quyền vị trí với LocationPermissionManager (không cần delay)
     _checkLocationPermission();
@@ -124,28 +129,143 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   Future<void> saveCookies(Uri url) async {
-    final cookieManager = CookieManager.instance();
-    final cookies = await cookieManager.getCookies(url: WebUri(url.toString()));
-    final prefs = await SharedPreferences.getInstance();
-    final cookieString = cookies.map((c) => '${c.name}=${c.value}').join(';');
-    await prefs.setString('cookies', cookieString);
+    try {
+      print('💾 Bắt đầu lưu cookies cho URL: $url');
+      final cookieManager = CookieManager.instance();
+      final cookies = await cookieManager.getCookies(url: WebUri(url.toString()));
+      
+      if (cookies.isEmpty) {
+        print('⚠️ Không có cookies để lưu');
+        return;
+      }
+      
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Lưu cookies với domain-specific key để tránh conflict
+      final domain = url.host;
+      final cookieKey = 'cookies_$domain';
+      
+      // Tạo cookie string với thông tin đầy đủ hơn
+      final cookieList = <Map<String, dynamic>>[];
+      for (var cookie in cookies) {
+        cookieList.add({
+          'name': cookie.name,
+          'value': cookie.value,
+          'domain': cookie.domain ?? domain,
+          'path': cookie.path ?? '/',
+          'secure': cookie.isSecure ?? false,
+          'httpOnly': cookie.isHttpOnly ?? false,
+          'sameSite': cookie.sameSite?.toString() ?? 'Lax',
+          'expiresDate': cookie.expiresDate,
+        });
+      }
+      
+      final cookieJson = jsonEncode(cookieList);
+      await prefs.setString(cookieKey, cookieJson);
+      
+      // 🌐 Lưu vào global storage nếu là domain maqr.vn
+      if (domain.contains('maqr.vn')) {
+        print('🌐 Lưu cookies vào global storage cho maqr.vn...');
+        await _globalCookieManager.saveGlobalCookies();
+      }
+      
+      print('✅ Đã lưu ${cookies.length} cookies cho domain: $domain');
+    } catch (e) {
+      print('❌ Lỗi khi lưu cookies: $e');
+    }
   }
 
   Future<void> loadCookies(Uri url) async {
-    final prefs = await SharedPreferences.getInstance();
-    final cookieString = prefs.getString('cookies');
-    if (cookieString != null) {
+    try {
+      print('📥 Bắt đầu load cookies cho URL: $url');
+      final domain = url.host;
+      
+      // 🌐 Load từ global storage trước nếu là domain maqr.vn
+      if (domain.contains('maqr.vn')) {
+        print('🌐 Load cookies từ global storage cho maqr.vn...');
+        await _globalCookieManager.loadGlobalCookies();
+      }
+      
+      final prefs = await SharedPreferences.getInstance();
+      final cookieKey = 'cookies_$domain';
+      
+      final cookieJson = prefs.getString(cookieKey);
+      if (cookieJson == null || cookieJson.isEmpty) {
+        print('⚠️ Không tìm thấy cookies cho domain: $domain');
+        return;
+      }
+      
       final cookieManager = CookieManager.instance();
-      for (var cookie in cookieString.split(';')) {
-        final parts = cookie.split('=');
-        if (parts.length == 2) {
+      final cookieList = jsonDecode(cookieJson) as List<dynamic>;
+      
+      int loadedCount = 0;
+      for (var cookieData in cookieList) {
+        try {
+          final cookieMap = cookieData as Map<String, dynamic>;
+          
+          // Kiểm tra xem cookie có còn hạn không
+          final expiresDate = cookieMap['expiresDate'] != null 
+              ? DateTime.fromMillisecondsSinceEpoch(cookieMap['expiresDate'])
+              : null;
+          
+          if (expiresDate != null && expiresDate.isBefore(DateTime.now())) {
+            print('⏰ Cookie ${cookieMap['name']} đã hết hạn, bỏ qua');
+            continue;
+          }
+          
           await cookieManager.setCookie(
             url: WebUri(url.toString()),
-            name: parts[0].trim(),
-            value: parts[1].trim(),
+            name: cookieMap['name'] ?? '',
+            value: cookieMap['value'] ?? '',
+            domain: cookieMap['domain'] ?? domain,
+            path: cookieMap['path'] ?? '/',
+            isSecure: cookieMap['secure'] ?? false,
+            isHttpOnly: cookieMap['httpOnly'] ?? false,
+            sameSite: _parseSameSite(cookieMap['sameSite']),
+            expiresDate: expiresDate?.millisecondsSinceEpoch,
           );
+          
+          loadedCount++;
+        } catch (e) {
+          print('❌ Lỗi khi load cookie individual: $e');
         }
       }
+      
+      print('✅ Đã load $loadedCount cookies cho domain: $domain');
+    } catch (e) {
+      print('❌ Lỗi khi load cookies: $e');
+    }
+  }
+
+  HTTPCookieSameSitePolicy? _parseSameSite(String? sameSite) {
+    if (sameSite == null) return HTTPCookieSameSitePolicy.LAX;
+    
+    switch (sameSite.toLowerCase()) {
+      case 'strict':
+        return HTTPCookieSameSitePolicy.STRICT;
+      case 'none':
+        return HTTPCookieSameSitePolicy.NONE;
+      case 'lax':
+      default:
+        return HTTPCookieSameSitePolicy.LAX;
+    }
+  }
+
+  // Method để clear cookies khi cần
+  Future<void> clearCookies(Uri url) async {
+    try {
+      print('🗑️ Clearing cookies cho URL: $url');
+      final cookieManager = CookieManager.instance();
+      await cookieManager.deleteCookies(url: WebUri(url.toString()));
+      
+      final prefs = await SharedPreferences.getInstance();
+      final domain = url.host;
+      final cookieKey = 'cookies_$domain';
+      await prefs.remove(cookieKey);
+      
+      print('✅ Đã clear cookies cho domain: $domain');
+    } catch (e) {
+      print('❌ Lỗi khi clear cookies: $e');
     }
   }
 
@@ -507,9 +627,182 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
+  // Method để đồng bộ cookies định kỳ (gọi mỗi khi page load)
+  Future<void> syncCookies(Uri url) async {
+    try {
+      print('🔄 Bắt đầu đồng bộ cookies cho URL: $url');
+      
+      // Lưu cookies hiện tại từ WebView
+      await saveCookies(url);
+      
+      // 🌐 Đồng bộ cookies across WebViews nếu là maqr.vn
+      if (url.host.contains('maqr.vn')) {
+        print('🌐 Đồng bộ cookies across WebViews...');
+        await _globalCookieManager.syncCookiesAcrossWebViews();
+      }
+      
+      // Load lại cookies để đảm bảo đồng bộ
+      await loadCookies(url);
+      
+      print('✅ Hoàn thành đồng bộ cookies');
+    } catch (e) {
+      print('❌ Lỗi khi đồng bộ cookies: $e');
+    }
+  }
+
+  // Method để kiểm tra trạng thái cookies
+  Future<void> debugCookies(Uri url) async {
+    try {
+      final cookieManager = CookieManager.instance();
+      final cookies = await cookieManager.getCookies(url: WebUri(url.toString()));
+      
+      print('🍪 Debug Cookies cho ${url.host}:');
+      print('   - Số lượng cookies: ${cookies.length}');
+      
+      for (var cookie in cookies) {
+        print('   - ${cookie.name}: ${cookie.value.length > 50 ? '${cookie.value.substring(0, 50)}...' : cookie.value}');
+        print('     Domain: ${cookie.domain}, Path: ${cookie.path}');
+        print('     Secure: ${cookie.isSecure}, HttpOnly: ${cookie.isHttpOnly}');
+        print('     Expires: ${cookie.expiresDate != null ? DateTime.fromMillisecondsSinceEpoch(cookie.expiresDate!) : 'Session'}');
+      }
+    } catch (e) {
+      print('❌ Lỗi khi debug cookies: $e');
+    }
+  }
+
+  // Method để xử lý các vấn đề cookie thường gặp
+  Future<void> handleCookieIssues(Uri url) async {
+    try {
+      print('🔧 Kiểm tra và xử lý vấn đề cookies...');
+      
+      final cookieManager = CookieManager.instance();
+      
+      // 1. Kiểm tra cookie có được lưu không
+      final cookies = await cookieManager.getCookies(url: WebUri(url.toString()));
+      if (cookies.isEmpty) {
+        print('⚠️ Không có cookies, có thể do:');
+        print('   - Website chưa set cookies');
+        print('   - Cookies bị block bởi SameSite policy');
+        print('   - Quyền storage bị deny');
+        
+        // Thử clear cache và reload
+        await cookieManager.deleteAllCookies();
+        print('🗑️ Đã clear tất cả cookies và thử lại');
+      }
+      
+      // 2. Kiểm tra third-party cookies
+      final domain = url.host;
+      final hasThirdPartyCookies = cookies.any((cookie) => 
+        cookie.domain != null && !cookie.domain!.contains(domain));
+      
+      if (hasThirdPartyCookies) {
+        print('🍪 Phát hiện third-party cookies - đảm bảo thirdPartyCookiesEnabled = true');
+      }
+      
+      // 3. Kiểm tra secure cookies trên HTTP
+      final isHttps = url.scheme == 'https';
+      final hasSecureCookies = cookies.any((cookie) => cookie.isSecure == true);
+      
+      if (!isHttps && hasSecureCookies) {
+        print('⚠️ Cảnh báo: Có secure cookies nhưng đang dùng HTTP');
+        print('   - Secure cookies sẽ không được gửi qua HTTP');
+        print('   - Khuyến nghị chuyển sang HTTPS');
+      }
+      
+      // 4. Kiểm tra cookies hết hạn
+      final now = DateTime.now();
+      final expiredCookies = cookies.where((cookie) => 
+        cookie.expiresDate != null && 
+        DateTime.fromMillisecondsSinceEpoch(cookie.expiresDate!).isBefore(now)
+      ).length;
+      
+      if (expiredCookies > 0) {
+        print('⏰ Có $expiredCookies cookies đã hết hạn');
+        
+        // Clear expired cookies
+        for (var cookie in cookies) {
+          if (cookie.expiresDate != null && 
+              DateTime.fromMillisecondsSinceEpoch(cookie.expiresDate!).isBefore(now)) {
+            await cookieManager.deleteCookie(
+              url: WebUri(url.toString()),
+              name: cookie.name,
+            );
+          }
+        }
+        print('🗑️ Đã xóa cookies hết hạn');
+      }
+      
+    } catch (e) {
+      print('❌ Lỗi khi xử lý vấn đề cookies: $e');
+    }
+  }
+
+  // Method để test cookie functionality
+  Future<void> testCookieFunctionality(Uri url) async {
+    try {
+      print('🧪 Test cookie functionality...');
+      
+      final cookieManager = CookieManager.instance();
+      final testCookieName = 'qr_scanner_test_cookie';
+      final testCookieValue = 'test_value_${DateTime.now().millisecondsSinceEpoch}';
+      
+      // Set test cookie
+      await cookieManager.setCookie(
+        url: WebUri(url.toString()),
+        name: testCookieName,
+        value: testCookieValue,
+        domain: url.host,
+        path: '/',
+      );
+      
+      // Verify test cookie
+      final cookies = await cookieManager.getCookies(url: WebUri(url.toString()));
+      final testCookie = cookies.firstWhere(
+        (cookie) => cookie.name == testCookieName,
+        orElse: () => Cookie(name: '', value: ''),
+      );
+      
+      if (testCookie.name.isNotEmpty && testCookie.value == testCookieValue) {
+        print('✅ Cookie functionality hoạt động bình thường');
+      } else {
+        print('❌ Cookie functionality có vấn đề');
+      }
+      
+      // Clean up test cookie
+      await cookieManager.deleteCookie(
+        url: WebUri(url.toString()),
+        name: testCookieName,
+      );
+      
+    } catch (e) {
+      print('❌ Lỗi khi test cookie functionality: $e');
+    }
+  }
+
+  // Initialize global cookies
+  Future<void> _initializeGlobalCookies() async {
+    try {
+      print('🌐 Initializing global cookies for WebView...');
+      await _globalCookieManager.loadGlobalCookies();
+      await _globalCookieManager.debugGlobalCookies();
+    } catch (e) {
+      print('❌ Error initializing global cookies: $e');
+    }
+  }
+
   @override
   void dispose() {
+    print('🗑️ Disposing WebViewScreen...');
     _locationTimer?.cancel();
+    
+    // Lưu cookies cuối cùng trước khi dispose
+    if (webViewController != null) {
+      final uri = Uri.parse(widget.url);
+      saveCookies(uri).catchError((e) {
+        print('❌ Lỗi khi lưu cookies trong dispose: $e');
+      });
+    }
+    
     super.dispose();
   }
   
@@ -530,29 +823,78 @@ class _WebViewScreenState extends State<WebViewScreen> {
       body: InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(widget.url)),
         initialSettings: InAppWebViewSettings(
+          // Cookie settings - quan trọng cho cả Android và iOS
           cacheEnabled: true,
-          useOnLoadResource: true,
           clearCache: false,
           sharedCookiesEnabled: true,
+          thirdPartyCookiesEnabled: true, // Cho phép third-party cookies
+          
+          // Storage settings
           domStorageEnabled: true,
-          databaseEnabled: true, // Android: bật Web SQL Database
+          databaseEnabled: true,
+          
+          // Network và Security
+          mixedContentMode: MixedContentMode.MIXED_CONTENT_COMPATIBILITY_MODE,
+          allowsInlineMediaPlayback: true,
+          allowsAirPlayForMediaPlayback: true,
+          
+          // User experience
           supportZoom: true,
           mediaPlaybackRequiresUserGesture: false,
-          // iOS: các tuỳ chọn này sẽ tự động bật cache
+          useOnLoadResource: true,
+          
+          // Platform specific optimizations
+          disableDefaultErrorPage: false,
+          allowsLinkPreview: true,
+          allowingReadAccessTo: WebUri('file://'),
+          
+          // Performance
+          cacheMode: CacheMode.LOAD_DEFAULT,
+          applicationNameForUserAgent: 'QRScannerApp/1.0',
+          
+          // Headers để đảm bảo cookie được gửi
+          userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36 QRScannerApp/1.0',
         ),
         onWebViewCreated: (controller) async {
           webViewController = controller;
+          print('🌐 WebView được tạo, bắt đầu load cookies...');
           await loadCookies(uri);
+          // Debug cookies sau khi load
+          await debugCookies(uri);
           // Inject location helpers ngay khi webview được tạo
           await _injectLocationHelpers();
         },
         onLoadStop: (controller, url) async {
-          await saveCookies(uri);
+          print('📄 Page load hoàn thành: $url');
+          
+          // Test cookie functionality
+          await testCookieFunctionality(uri);
+          
+          // Đồng bộ cookies sau khi page load
+          await syncCookies(uri);
+          
+          // Xử lý các vấn đề cookies
+          await handleCookieIssues(uri);
+          
+          // Debug cookies sau khi xử lý
+          await debugCookies(uri);
+          
           // Re-inject location helpers sau khi page load xong
           await _injectLocationHelpers();
+          
           // Inject vị trí hiện tại nếu có
           if (!_isCheckingLocation) {
             _checkCurrentLocation();
+          }
+        },
+        onLoadStart: (controller, url) async {
+          print('📄 Page bắt đầu load: $url');
+        },
+        onUpdateVisitedHistory: (controller, url, androidIsReload) async {
+          print('📝 Update visited history: $url');
+          // Lưu cookies khi có thay đổi history
+          if (url != null) {
+            await saveCookies(Uri.parse(url.toString()));
           }
         },
         shouldOverrideUrlLoading: (controller, navigationAction) async {

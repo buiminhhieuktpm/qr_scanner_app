@@ -5,6 +5,7 @@ import 'history_screen.dart';
 import 'webview_screen.dart';
 import '../services/native_permission_service.dart';
 import '../services/location_permission_manager.dart';
+import '../services/global_cookie_manager.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,11 +20,26 @@ class _HomeScreenState extends State<HomeScreen> {
   bool scanned = false;
   bool showScanner = false;
   String? scannedLink;
-  int _selectedIndex = 1; // 0: Home(WebView), 1: History, 2: Account
+  int _selectedIndex = 1; // 0: History, 1: Home(WebView), 2: Account
+  final GlobalCookieManager _globalCookieManager = GlobalCookieManager();
 
   @override
   void initState() {
     super.initState();
+    _initializeApp();
+  }
+  
+  Future<void> _initializeApp() async {
+    // Khởi tạo global cookies
+    try {
+      print('🌐 Khởi tạo global cookies...');
+      await _globalCookieManager.loadGlobalCookies();
+      await _globalCookieManager.debugGlobalCookies();
+    } catch (e) {
+      print('❌ Lỗi khi khởi tạo global cookies: $e');
+    }
+    
+    // Kiểm tra quyền vị trí
     _checkLocationPermissionOnStart();
   }
 
@@ -46,9 +62,9 @@ class _HomeScreenState extends State<HomeScreen> {
   // Thêm method kiểm tra và yêu cầu quyền camera
   Future<bool> _requestCameraPermission() async {
     try {
-      print('=== TRYING NATIVE iOS CAMERA PERMISSION ===');
+      print('=== CHECKING CAMERA PERMISSION ===');
       
-      // Thử native iOS method trước
+      // Thử native method trước (hoạt động cho cả iOS và Android)
       final nativeStatus = await NativePermissionService.getCameraPermissionStatus();
       print('🎯 Native camera status: $nativeStatus');
       
@@ -166,7 +182,16 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  void _onItemTapped(int index) {
+  void _onItemTapped(int index) async {
+    // Đồng bộ cookies trước khi chuyển tab
+    try {
+      print('🔄 Đồng bộ cookies trước khi chuyển tab từ $_selectedIndex sang $index');
+      await _globalCookieManager.syncCookiesAcrossWebViews();
+      print('✅ Hoàn thành đồng bộ cookies khi chuyển tab');
+    } catch (e) {
+      print('❌ Lỗi khi đồng bộ cookies: $e');
+    }
+    
     setState(() {
       _selectedIndex = index;
       showScanner = false;
