@@ -128,6 +128,81 @@ class GlobalCookieManager {
     }
   }
 
+  // Force save cookies ngay lập tức từ tất cả active WebViews
+  Future<void> forceSaveAllCookies() async {
+    try {
+      print('🚨 Force saving cookies từ tất cả active WebViews...');
+      
+      final cookieManager = CookieManager.instance();
+      final urls = [
+        'https://maqr.vn',
+        'https://maqr.vn/vnptcheck/',
+        'https://maqr.vn/vnptcheck/#/app',
+        'https://maqr.vn/vnptcheck/#/taikhoan',
+      ];
+      
+      // Lấy cookies từ tất cả URLs
+      final allCookies = <Cookie>[];
+      for (var url in urls) {
+        try {
+          final cookies = await cookieManager.getCookies(url: WebUri(url));
+          allCookies.addAll(cookies);
+          print('🍪 Lấy được ${cookies.length} cookies từ $url');
+        } catch (e) {
+          print('❌ Lỗi khi lấy cookies từ $url: $e');
+        }
+      }
+      
+      if (allCookies.isEmpty) {
+        print('⚠️ Không có cookies để force save');
+        return;
+      }
+      
+      // Loại bỏ duplicates dựa trên name và domain
+      final uniqueCookies = <String, Cookie>{};
+      for (var cookie in allCookies) {
+        final key = '${cookie.name}_${cookie.domain}';
+        uniqueCookies[key] = cookie;
+      }
+      
+      final prefs = await SharedPreferences.getInstance();
+      final cookieList = <Map<String, dynamic>>[];
+      
+      for (var cookie in uniqueCookies.values) {
+        // Chỉ lưu cookies còn hạn
+        final expiresDate = cookie.expiresDate != null 
+            ? DateTime.fromMillisecondsSinceEpoch(cookie.expiresDate!)
+            : null;
+        
+        if (expiresDate != null && expiresDate.isBefore(DateTime.now())) {
+          continue; // Skip expired cookies
+        }
+        
+        cookieList.add({
+          'name': cookie.name,
+          'value': cookie.value,
+          'domain': cookie.domain ?? _baseDomain,
+          'path': cookie.path ?? '/',
+          'secure': cookie.isSecure ?? false,
+          'httpOnly': cookie.isHttpOnly ?? false,
+          'sameSite': cookie.sameSite?.toString() ?? 'Lax',
+          'expiresDate': cookie.expiresDate,
+        });
+      }
+      
+      final cookieJson = jsonEncode(cookieList);
+      await prefs.setString(_globalCookieKey, cookieJson);
+      
+      print('🚨 Force saved ${cookieList.length} unique cookies');
+      
+      // Sync ngay lập tức để load lại cho tất cả WebViews
+      await loadGlobalCookies();
+      
+    } catch (e) {
+      print('❌ Error force saving cookies: $e');
+    }
+  }
+
   // Sync cookies giữa các WebView
   Future<void> syncCookiesAcrossWebViews() async {
     await saveGlobalCookies();

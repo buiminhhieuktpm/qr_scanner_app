@@ -186,6 +186,15 @@ class _HomeScreenState extends State<HomeScreen> {
     // Đồng bộ cookies trước khi chuyển tab
     try {
       print('🔄 Đồng bộ cookies trước khi chuyển tab từ $_selectedIndex sang $index');
+      
+      // Nếu đang rời khỏi tab tài khoản (index 2), force save tất cả cookies
+      if (_selectedIndex == 2) {
+        print('🍪 Đang rời khỏi tab tài khoản - force save tất cả cookies');
+        await _globalCookieManager.forceSaveAllCookies();
+        // Thêm delay nhỏ để đảm bảo cookies được lưu hoàn toàn
+        await Future.delayed(Duration(milliseconds: 500));
+      }
+      
       await _globalCookieManager.syncCookiesAcrossWebViews();
       print('✅ Hoàn thành đồng bộ cookies khi chuyển tab');
     } catch (e) {

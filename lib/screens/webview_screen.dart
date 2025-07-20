@@ -29,9 +29,10 @@ class WebViewScreen extends StatefulWidget {
   _WebViewScreenState createState() => _WebViewScreenState();
 }
 
-class _WebViewScreenState extends State<WebViewScreen> {
+class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserver {
   InAppWebViewController? webViewController;
   Timer? _locationTimer;
+  Timer? _cookieSaveTimer;
   bool _isCheckingLocation = false; // Cờ để tránh check location đồng thời
   final GlobalCookieManager _globalCookieManager = GlobalCookieManager();
 
@@ -39,8 +40,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
   void initState() {
     super.initState();
     
+    // Thêm observer để lắng nghe app lifecycle
+    WidgetsBinding.instance.addObserver(this);
+    
     // Load global cookies trước khi khởi tạo WebView
     _initializeGlobalCookies();
+    
+    // Bắt đầu timer lưu cookies định kỳ
+    _startPeriodicCookieSaving();
     
     // Kiểm tra quyền vị trí với LocationPermissionManager (không cần delay)
     _checkLocationPermission();
@@ -64,6 +71,73 @@ class _WebViewScreenState extends State<WebViewScreen> {
       Future.delayed(const Duration(milliseconds: 1500), () {
         fetchQrcodeInfo(qrcode);
       });
+    }
+  }
+
+  // Bắt đầu lưu cookies định kỳ mỗi 30 giây
+  void _startPeriodicCookieSaving() {
+    _cookieSaveTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      _saveCurrentCookies();
+    });
+  }
+
+  // Lưu cookies hiện tại
+  Future<void> _saveCurrentCookies() async {
+    if (webViewController != null) {
+      try {
+        final uri = Uri.parse(widget.url);
+        print('🍪 Lưu cookies định kỳ cho ${uri.host}...');
+        await saveCookies(uri);
+        
+        // Đồng bộ global cookies nếu là maqr.vn
+        if (uri.host.contains('maqr.vn')) {
+          await _globalCookieManager.saveGlobalCookies();
+        }
+      } catch (e) {
+        print('❌ Lỗi khi lưu cookies định kỳ: $e');
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    
+    switch (state) {
+      case AppLifecycleState.paused:
+        print('📱 App đã bị tạm dừng - lưu cookies ngay lập tức');
+        _saveCurrentCookies();
+        break;
+      case AppLifecycleState.inactive:
+        print('📱 App không hoạt động - lưu cookies ngay lập tức');
+        _saveCurrentCookies();
+        break;
+      case AppLifecycleState.detached:
+        print('📱 App đã bị detached - lưu cookies cuối cùng');
+        _saveCurrentCookies();
+        break;
+      case AppLifecycleState.resumed:
+        print('📱 App đã được resume - load cookies');
+        _loadCurrentCookies();
+        break;
+      case AppLifecycleState.hidden:
+        print('📱 App đã bị ẩn - lưu cookies');
+        _saveCurrentCookies();
+        break;
+    }
+  }
+
+  // Load cookies khi app resume
+  Future<void> _loadCurrentCookies() async {
+    if (webViewController != null) {
+      try {
+        final uri = Uri.parse(widget.url);
+        print('🍪 Load cookies khi app resume...');
+        await loadCookies(uri);
+        await _globalCookieManager.loadGlobalCookies();
+      } catch (e) {
+        print('❌ Lỗi khi load cookies: $e');
+      }
     }
   }
 
@@ -548,13 +622,70 @@ class _WebViewScreenState extends State<WebViewScreen> {
             });
           };
           
-          console.log('Location helpers injected successfully');
+          // Thêm listener để tự động lưu cookies khi có thay đổi trong DOM
+          let cookieSaveTimeout;
+          function scheduleCookieSave() {
+            if (cookieSaveTimeout) {
+              clearTimeout(cookieSaveTimeout);
+            }
+            cookieSaveTimeout = setTimeout(function() {
+              console.log('🍪 DOM changed - requesting cookie save');
+              // Gửi message để Flutter biết cần lưu cookies
+              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                window.flutter_inappwebview.callHandler('saveCookiesFromJS');
+              }
+            }, 2000); // Delay 2 giây để tránh save quá nhiều
+          }
+          
+          // Listen for DOM changes that might indicate login/logout
+          if (document.body) {
+            const observer = new MutationObserver(function(mutations) {
+              mutations.forEach(function(mutation) {
+                // Kiểm tra các thay đổi có thể liên quan đến login/logout
+                if (mutation.type === 'childList' || mutation.type === 'characterData') {
+                  const text = document.body.innerText.toLowerCase();
+                  if (text.includes('đăng nhập') || text.includes('đăng xuất') || 
+                      text.includes('login') || text.includes('logout') ||
+                      text.includes('tài khoản') || text.includes('account')) {
+                    console.log('🍪 Login/logout related change detected');
+                    scheduleCookieSave();
+                  }
+                }
+              });
+            });
+            
+            observer.observe(document.body, {
+              childList: true,
+              subtree: true,
+              characterData: true
+            });
+            
+            console.log('🍪 DOM mutation observer setup complete');
+          }
+          
+          // Listen for storage events (localStorage, sessionStorage changes)
+          window.addEventListener('storage', function(e) {
+            console.log('🍪 Storage event detected:', e.key);
+            scheduleCookieSave();
+          });
+          
+          // Listen for cookie changes via document.cookie
+          let lastCookies = document.cookie;
+          setInterval(function() {
+            if (document.cookie !== lastCookies) {
+              console.log('🍪 Cookie change detected via polling');
+              lastCookies = document.cookie;
+              scheduleCookieSave();
+            }
+          }, 5000); // Check every 5 seconds
+          
+          console.log('Location helpers and cookie monitoring injected successfully');
         })();
       ''');
       
-      print('✅ Đã inject location helpers vào WebView');
+      print('✅ Đã inject location helpers và cookie monitoring vào WebView');
     } catch (e) {
-      print('❌ Lỗi khi inject location helpers: $e');
+      print('❌ Lỗi khi inject location helpers và cookie monitoring: $e');
     }
   }
 
@@ -793,14 +924,28 @@ class _WebViewScreenState extends State<WebViewScreen> {
   @override
   void dispose() {
     print('🗑️ Disposing WebViewScreen...');
-    _locationTimer?.cancel();
     
-    // Lưu cookies cuối cùng trước khi dispose
+    // Remove lifecycle observer
+    WidgetsBinding.instance.removeObserver(this);
+    
+    // Cancel timers
+    _locationTimer?.cancel();
+    _cookieSaveTimer?.cancel();
+    
+    // Force save tất cả cookies trước khi dispose
     if (webViewController != null) {
       final uri = Uri.parse(widget.url);
-      saveCookies(uri).catchError((e) {
-        print('❌ Lỗi khi lưu cookies trong dispose: $e');
-      });
+      
+      // Sử dụng force save để đảm bảo không mất cookies
+      if (uri.host.contains('maqr.vn')) {
+        _globalCookieManager.forceSaveAllCookies().catchError((e) {
+          print('❌ Lỗi khi force save cookies trong dispose: $e');
+        });
+      } else {
+        saveCookies(uri).catchError((e) {
+          print('❌ Lỗi khi lưu cookies trong dispose: $e');
+        });
+      }
     }
     
     super.dispose();
@@ -858,6 +1003,17 @@ class _WebViewScreenState extends State<WebViewScreen> {
         onWebViewCreated: (controller) async {
           webViewController = controller;
           print('🌐 WebView được tạo, bắt đầu load cookies...');
+          
+          // Thêm handler để nhận message từ JavaScript
+          controller.addJavaScriptHandler(
+            handlerName: 'saveCookiesFromJS',
+            callback: (args) async {
+              print('🍪 JavaScript yêu cầu lưu cookies');
+              await _saveCurrentCookies();
+              return 'Cookies saved';
+            },
+          );
+          
           await loadCookies(uri);
           // Debug cookies sau khi load
           await debugCookies(uri);
