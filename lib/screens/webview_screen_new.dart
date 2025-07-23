@@ -62,18 +62,18 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
-  // Kiểm tra quyền vị trí bằng LocationPermissionManager
+  // Kiểm tra quyền vị trí đơn giản
   Future<void> _checkLocationPermission() async {
     try {
-      print('🔍 Kiểm tra quyền vị trí với LocationPermissionManager...');
+      print('🔍 Kiểm tra quyền vị trí...');
       
       final hasPermission = await LocationPermissionManager.hasLocationPermission();
       if (hasPermission) {
         print('✅ Đã có quyền vị trí, bắt đầu tracking');
         _startLocationTracking();
       } else {
-        print('⚠️ Chưa có quyền vị trí, LocationPermissionManager sẽ tự động xử lý');
-        // LocationPermissionManager sẽ tự động xử lý việc yêu cầu quyền theo logic định kỳ
+        print('⚠️ Không có quyền vị trí');
+        // Không làm gì thêm - chỉ xin quyền lần đầu tiên mở app
       }
     } catch (e) {
       print('💥 Lỗi khi kiểm tra quyền vị trí: $e');
@@ -317,6 +317,18 @@ class _WebViewScreenState extends State<WebViewScreen> {
       if (!hasPermission) {
         print('❌ Không có quyền vị trí, dừng tracking');
         _locationTimer?.cancel();
+        return;
+      }
+      
+      // Kiểm tra dịch vụ vị trí có được bật không
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        print('⚠️ Dịch vụ vị trí bị tắt, không thể lấy vị trí');
+        
+        // Hiển thị dialog một lần duy nhất nếu chưa hiển thị
+        if (mounted) {
+          await LocationPermissionManager.showLocationServiceDisabledDialog(context);
+        }
         return;
       }
       

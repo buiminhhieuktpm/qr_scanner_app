@@ -43,14 +43,11 @@ class _HomeScreenState extends State<HomeScreen> {
     _checkLocationPermissionOnStart();
   }
 
-  // Kiểm tra và hiển thị dialog quyền vị trí khi mở app
+  // Kiểm tra quyền vị trí đơn giản (không cần dialog)
   Future<void> _checkLocationPermissionOnStart() async {
-    // Đợi một chút để UI render xong
-    await Future.delayed(Duration(milliseconds: 500));
-    
-    if (mounted) {
-      await LocationPermissionManager.checkAndShowPermissionDialog(context);
-    }
+    // Với phiên bản đơn giản, chỉ log trạng thái
+    final hasPermission = await LocationPermissionManager.hasLocationPermission();
+    print('📍 [HOME] Trạng thái quyền vị trí: ${hasPermission ? "Có" : "Không có"}');
   }
 
   @override

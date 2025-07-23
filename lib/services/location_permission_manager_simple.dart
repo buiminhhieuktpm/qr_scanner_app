@@ -6,37 +6,12 @@ import 'native_permission_service.dart';
 
 class LocationPermissionManager {
   static const String _hasRequestedOnceKey = 'has_requested_location_once';
-  static const String _hasShownLocationDisabledDialogKey = 'has_shown_location_disabled_dialog';
-  static bool _locationDialogShown = false;
-
-  /// Kiểm tra xem đã hiển thị dialog location disabled chưa
-  static Future<bool> hasShownLocationDisabledDialog() async {
-    if (_locationDialogShown) return true;
-    
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_hasShownLocationDisabledDialogKey) ?? false;
-  }
-
-  /// Đánh dấu đã hiển thị dialog location disabled
-  static Future<void> markLocationDisabledDialogShown() async {
-    _locationDialogShown = true;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_hasShownLocationDisabledDialogKey, true);
-  }
-
-  /// Reset trạng thái dialog (để test)
-  static Future<void> resetLocationDisabledDialog() async {
-    _locationDialogShown = false;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_hasShownLocationDisabledDialogKey);
-  }
+  
+  static bool _isRequestingPermission = false;
 
   /// Khởi tạo manager khi app mở - chỉ xin quyền lần đầu tiên
   static Future<Map<String, dynamic>?> initialize() async {
     print('📍 [INIT] Khởi tạo LocationPermissionManager...');
-    
-    // Reset dialog state mỗi khi khởi động app để có thể hiển thị lại nếu cần
-    _locationDialogShown = false;
     
     // Kiểm tra xem đã từng xin quyền chưa
     final prefs = await SharedPreferences.getInstance();
@@ -222,68 +197,8 @@ class LocationPermissionManager {
     print('📍 Reset trạng thái đã xin quyền');
   }
 
-  /// Hiển thị dialog location service disabled một lần duy nhất
-  static Future<void> showLocationServiceDisabledDialog(BuildContext context) async {
-    // Kiểm tra nếu dialog đã được hiển thị trong session này
-    if (_locationDialogShown) {
-      print('📍 Dialog location service disabled đã được hiển thị trong session này, bỏ qua');
-      return;
-    }
-
-    // Kiểm tra nếu dialog đã được hiển thị lâu dài
-    final hasShown = await hasShownLocationDisabledDialog();
-    if (hasShown) {
-      print('📍 Dialog location service disabled đã được hiển thị trước đó, bỏ qua');
-      return;
-    }
-
-    // Đánh dấu đã hiển thị trong cả session và storage lâu dài
-    _locationDialogShown = true;
-    await markLocationDisabledDialogShown();
-    
-    if (!context.mounted) return;
-
-    // Thêm delay nhỏ để tránh spam
-    await Future.delayed(const Duration(milliseconds: 500));
-    
-    if (!context.mounted) return;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Dịch vụ vị trí bị tắt'),
-          content: const Text(
-            'Vui lòng bật dịch vụ vị trí trong cài đặt để ứng dụng có thể hoạt động tốt nhất.\n\n'
-            'Hướng dẫn:\n'
-            '• iPhone: Cài đặt > Quyền riêng tư & Bảo mật > Dịch vụ vị trí\n'
-            '• Android: Cài đặt > Vị trí > Bật dịch vụ vị trí'
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Bỏ qua'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            TextButton(
-              child: const Text('Mở Cài đặt'),
-              onPressed: () async {
-                Navigator.of(context).pop();
-                await NativePermissionService.openAppSettings();
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   /// Dọn dẹp resources (không cần thiết cho phiên bản đơn giản)
   static void dispose() {
-    // Reset dialog state khi app đóng để có thể hiển thị lại khi mở app
-    _locationDialogShown = false;
     print('📍 [DISPOSE] LocationPermissionManager disposed');
   }
 
@@ -291,13 +206,10 @@ class LocationPermissionManager {
   static Future<Map<String, dynamic>> getDebugInfo() async {
     final prefs = await SharedPreferences.getInstance();
     final hasRequestedOnce = prefs.getBool(_hasRequestedOnceKey) ?? false;
-    final hasShownDialog = prefs.getBool(_hasShownLocationDisabledDialogKey) ?? false;
     final permissionStatus = await getLocationPermissionStatus();
     
     return {
       'hasRequestedOnce': hasRequestedOnce,
-      'hasShownLocationDisabledDialog': hasShownDialog,
-      'locationDialogShownInMemory': _locationDialogShown,
       'permissionStatus': permissionStatus,
       'platform': Platform.isIOS ? 'iOS' : (Platform.isAndroid ? 'Android' : 'Other'),
     };
