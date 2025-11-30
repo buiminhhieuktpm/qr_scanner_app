@@ -7,7 +7,7 @@ import 'native_permission_service.dart';
 class LocationPermissionManager {
   static const String _hasRequestedOnceKey = 'has_requested_location_once';
   
-  static bool _isRequestingPermission = false;
+  static final bool _isRequestingPermission = false;
 
   /// Khởi tạo manager khi app mở - chỉ xin quyền lần đầu tiên
   static Future<Map<String, dynamic>?> initialize() async {

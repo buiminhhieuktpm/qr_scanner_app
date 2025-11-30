@@ -2,10 +2,10 @@ import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'native_permission_service.dart';
 
 class LocationPermissionManager {
-  static const String _hasRequestedOnceKey = 'has_requested_location_once';
   static const String _hasShownLocationDisabledDialogKey = 'has_shown_location_disabled_dialog';
   static bool _locationDialogShown = false;
 
@@ -31,134 +31,229 @@ class LocationPermissionManager {
     await prefs.remove(_hasShownLocationDisabledDialogKey);
   }
 
-  /// Khởi tạo manager khi app mở - chỉ xin quyền lần đầu tiên
+  /// Khởi tạo manager khi app mở - luôn check và xin quyền nếu cần
   static Future<Map<String, dynamic>?> initialize() async {
     print('📍 [INIT] Khởi tạo LocationPermissionManager...');
     
     // Reset dialog state mỗi khi khởi động app để có thể hiển thị lại nếu cần
     _locationDialogShown = false;
     
-    // Kiểm tra xem đã từng xin quyền chưa
-    final prefs = await SharedPreferences.getInstance();
-    final hasRequestedOnce = prefs.getBool(_hasRequestedOnceKey) ?? false;
-    
-    if (hasRequestedOnce) {
-      print('📍 [INIT] Đã từng xin quyền rồi, chỉ kiểm tra trạng thái hiện tại');
-      
-      // Chỉ kiểm tra và trả về trạng thái hiện tại, không xin quyền
-      if (Platform.isAndroid) {
-        final status = await Permission.locationWhenInUse.status;
-        return {
-          'hasPermission': status.isGranted,
-          'status': 'already_requested',
-          'platform': 'Android'
-        };
-      } else if (Platform.isIOS) {
-        final nativeStatus = await NativePermissionService.getLocationPermissionStatus();
-        return {
-          'hasPermission': nativeStatus == 'authorized' || nativeStatus == 'authorizedWhenInUse',
-          'status': 'already_requested',
-          'platform': 'iOS'
-        };
-      }
+    // Luôn kiểm tra trạng thái hiện tại và xin quyền nếu notDetermined
+    if (Platform.isAndroid) {
+      return await _checkAndRequestPermissionAndroid();
+    } else if (Platform.isIOS) {
+      return await _checkAndRequestPermissionIOS();
     }
     
-    // Chưa từng xin quyền, xin lần đầu tiên
-    print('📍 [INIT] Lần đầu tiên mở app, xin quyền vị trí...');
+    return null;
+  }
+  
+  /// Xin quyền trực tiếp (chỉ popup hệ thống, không show dialog tự tạo)
+  static Future<Map<String, dynamic>?> requestPermissionSilently() async {
+    print('📍 [SILENT] Xin quyền vị trí trực tiếp...');
     
     if (Platform.isAndroid) {
-      return await _requestPermissionFirstTimeAndroid();
+      final currentStatus = await Permission.locationWhenInUse.status;
+      
+      // Nếu đã có quyền
+      if (currentStatus.isGranted) {
+        return {'hasPermission': true, 'status': 'granted'};
+      }
+      
+      // Nếu bị chặn vĩnh viễn
+      if (currentStatus.isPermanentlyDenied) {
+        return {'hasPermission': false, 'status': 'permanently_denied'};
+      }
+      
+      // Xin quyền trực tiếp (chỉ popup hệ thống)
+      final result = await Permission.locationWhenInUse.request();
+      return {
+        'hasPermission': result.isGranted,
+        'status': result.isGranted ? 'granted' : 'denied'
+      };
     } else if (Platform.isIOS) {
-      return await _requestPermissionFirstTimeIOS();
+      final nativeStatus = await NativePermissionService.getLocationPermissionStatus();
+      
+      // Nếu đã có quyền
+      if (nativeStatus == 'authorizedWhenInUse' || nativeStatus == 'authorizedAlways') {
+        return {'hasPermission': true, 'status': 'granted'};
+      }
+      
+      // Nếu bị chặn vĩnh viễn
+      if (nativeStatus == 'denied' || nativeStatus == 'restricted') {
+        return {'hasPermission': false, 'status': 'permanently_denied'};
+      }
+      
+      // Xin quyền trực tiếp (chỉ popup hệ thống)
+      if (nativeStatus == 'notDetermined') {
+        final granted = await NativePermissionService.requestLocationPermissionNative();
+        return {
+          'hasPermission': granted,
+          'status': granted ? 'granted' : 'denied'
+        };
+      }
     }
     
     return null;
   }
 
-  /// Xin quyền lần đầu tiên cho Android
-  static Future<Map<String, dynamic>> _requestPermissionFirstTimeAndroid() async {
-    print('🤖 [Android] Xin quyền vị trí lần đầu tiên...');
+  /// Kiểm tra và xin quyền cho Android - luôn xin quyền nếu notDetermined
+  static Future<Map<String, dynamic>> _checkAndRequestPermissionAndroid() async {
+    print('🤖 [Android] Kiểm tra và xin quyền vị trí...');
+    
+    // TRƯỜNG HỢP 1: Kiểm tra Location Services có bật không
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    print('🤖 [Android] Location Services enabled: $serviceEnabled');
+    
+    if (!serviceEnabled) {
+      print('🤖 [Android] ❌ Location Services bị tắt trên thiết bị');
+      return {
+        'hasPermission': false,
+        'status': 'services_disabled',
+        'reason': 'Location Services bị tắt trên thiết bị',
+        'platform': 'Android',
+        'needsDialog': true,
+        'dialogType': 'services_disabled'
+      };
+    }
     
     final currentStatus = await Permission.locationWhenInUse.status;
     print('🤖 [Android] Trạng thái quyền hiện tại: $currentStatus');
     
     // Nếu đã có quyền
     if (currentStatus.isGranted) {
-      await _markAsRequested();
+      print('🤖 [Android] ✅ Đã có quyền vị trí');
       return {
         'hasPermission': true,
         'status': 'already_granted',
-        'platform': 'Android'
+        'platform': 'Android',
+        'needsDialog': false
       };
     }
     
-    // Xin quyền
+    // TRƯỜNG HỢP 2: Bị chặn vĩnh viễn (kiểm tra trước khi xin quyền)
+    if (currentStatus.isPermanentlyDenied) {
+      print('🤖 [Android] 🚫 Quyền vị trí bị chặn vĩnh viễn');
+      return {
+        'hasPermission': false,
+        'status': 'permanently_denied',
+        'reason': 'Người dùng đã từ chối quyền và chọn "Don\'t ask again"',
+        'platform': 'Android',
+        'needsDialog': true,
+        'dialogType': 'permanently_denied'
+      };
+    }
+    
+    // TRƯỜNG HỢP 3: Chưa cấp quyền hoặc "Ask Next Time" - XIN QUYỀN
+    print('🤖 [Android] ⚠️ Quyền chưa xác định (notDetermined) - xin quyền...');
     final result = await Permission.locationWhenInUse.request();
-    await _markAsRequested(); // Đánh dấu đã xin quyền bất kể kết quả
     
     print('🤖 [Android] Kết quả xin quyền: $result');
+    
+    // Nếu bị từ chối vĩnh viễn sau khi xin
+    if (result.isPermanentlyDenied) {
+      return {
+        'hasPermission': false,
+        'status': 'permanently_denied',
+        'reason': 'Người dùng đã từ chối quyền và chọn "Don\'t ask again"',
+        'platform': 'Android',
+        'needsDialog': true,
+        'dialogType': 'permanently_denied'
+      };
+    }
     
     return {
       'hasPermission': result.isGranted,
       'status': result.isGranted ? 'granted' : 'denied',
-      'platform': 'Android'
+      'platform': 'Android',
+      'needsDialog': !result.isGranted,
+      'dialogType': result.isGranted ? null : 'permission_denied'
     };
   }
 
-  /// Xin quyền lần đầu tiên cho iOS
-  static Future<Map<String, dynamic>> _requestPermissionFirstTimeIOS() async {
-    print('🍎 [iOS] Xin quyền vị trí lần đầu tiên...');
+  /// Kiểm tra và xin quyền cho iOS - luôn xin quyền nếu notDetermined
+  static Future<Map<String, dynamic>> _checkAndRequestPermissionIOS() async {
+    print('🍎 [iOS] Kiểm tra và xin quyền vị trí...');
     
     final nativeStatus = await NativePermissionService.getLocationPermissionStatus();
     print('🍎 [iOS] Native status: $nativeStatus');
     
-    // Nếu đã có quyền
-    if (nativeStatus == 'authorized' || nativeStatus == 'authorizedWhenInUse') {
-      await _markAsRequested();
+    // TRƯỜNG HỢP 1: Location Services bị tắt
+    if (nativeStatus == 'servicesDisabled') {
+      print('🍎 [iOS] ❌ Location Services bị tắt trên thiết bị');
       return {
-        'hasPermission': true,
-        'status': 'already_granted',
-        'platform': 'iOS'
+        'hasPermission': false,
+        'status': 'services_disabled',
+        'reason': 'Location Services bị tắt trên thiết bị',
+        'platform': 'iOS',
+        'needsDialog': true,
+        'dialogType': 'services_disabled'
       };
     }
     
-    // Nếu chưa xác định, xin quyền bằng native
+    // TRƯỜNG HỢP 2: Đã có quyền
+    if (nativeStatus == 'authorizedWhenInUse' || nativeStatus == 'authorizedAlways') {
+      print('🍎 [iOS] ✅ Đã có quyền vị trí');
+      return {
+        'hasPermission': true,
+        'status': 'already_granted',
+        'platform': 'iOS',
+        'needsDialog': false
+      };
+    }
+    
+    // TRƯỜNG HỢP 3: Chưa xác định (notDetermined) hoặc "Ask Next Time" - XIN QUYỀN
     if (nativeStatus == 'notDetermined') {
-      print('🍎 [iOS] Chưa xác định, xin quyền bằng native...');
+      print('🍎 [iOS] ⚠️ Quyền chưa xác định (notDetermined hoặc Ask Next Time) - xin quyền...');
       final granted = await NativePermissionService.requestLocationPermissionNative();
-      await _markAsRequested(); // Đánh dấu đã xin quyền bất kể kết quả
       
-      print('🍎 [iOS] Kết quả native: $granted');
+      print('🍎 [iOS] Kết quả xin quyền: $granted');
       
       return {
         'hasPermission': granted,
         'status': granted ? 'granted' : 'denied',
-        'platform': 'iOS'
+        'platform': 'iOS',
+        'needsDialog': !granted,
+        'dialogType': granted ? null : 'permission_denied'
       };
     }
     
-    // Đã bị từ chối hoặc hạn chế
-    await _markAsRequested();
+    // TRƯỜNG HỢP 4: Bị chặn vĩnh viễn (denied hoặc restricted)
+    if (nativeStatus == 'denied' || nativeStatus == 'restricted') {
+      print('🍎 [iOS] 🚫 Quyền vị trí bị chặn vĩnh viễn: $nativeStatus');
+      return {
+        'hasPermission': false,
+        'status': 'permanently_denied',
+        'reason': nativeStatus == 'restricted' ? 'Bị hạn chế bởi chính sách thiết bị' : 'Người dùng đã từ chối quyền',
+        'platform': 'iOS',
+        'needsDialog': true,
+        'dialogType': 'permanently_denied'
+      };
+    }
+    
+    // Trường hợp không xác định
     return {
       'hasPermission': false,
-      'status': 'denied_or_restricted',
-      'platform': 'iOS'
+      'status': 'unknown',
+      'platform': 'iOS',
+      'needsDialog': false
     };
   }
 
-  /// Đánh dấu đã từng xin quyền
-  static Future<void> _markAsRequested() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_hasRequestedOnceKey, true);
-    print('📍 Đã đánh dấu là đã xin quyền vị trí');
-  }
+
 
   /// Kiểm tra xem có quyền vị trí không
   static Future<bool> hasLocationPermission() async {
     if (Platform.isIOS) {
       final nativeStatus = await NativePermissionService.getLocationPermissionStatus();
-      return nativeStatus == 'authorized' || nativeStatus == 'authorizedWhenInUse';
+      // Kiểm tra cả Location Services và quyền ứng dụng
+      if (nativeStatus == 'servicesDisabled') return false;
+      return nativeStatus == 'authorizedWhenInUse' || nativeStatus == 'authorizedAlways';
     }
+    
+    // Android: Kiểm tra cả Location Services và quyền ứng dụng
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return false;
     
     final status = await Permission.locationWhenInUse.status;
     return status.isGranted;
@@ -168,19 +263,49 @@ class LocationPermissionManager {
   static Future<Map<String, dynamic>> getLocationPermissionStatus() async {
     if (Platform.isIOS) {
       final nativeStatus = await NativePermissionService.getLocationPermissionStatus();
+      
+      // TRƯỜNG HỢP 1: Location Services bị tắt
+      if (nativeStatus == 'servicesDisabled') {
+        return {
+          'hasPermission': false,
+          'isPermanentlyDenied': false,
+          'isNotDetermined': false,
+          'isServicesDisabled': true,
+          'nativeStatus': nativeStatus,
+          'platform': 'iOS'
+        };
+      }
+      
       return {
-        'hasPermission': nativeStatus == 'authorized' || nativeStatus == 'authorizedWhenInUse',
+        'hasPermission': nativeStatus == 'authorizedWhenInUse' || nativeStatus == 'authorizedAlways',
         'isPermanentlyDenied': nativeStatus == 'denied' || nativeStatus == 'restricted',
         'isNotDetermined': nativeStatus == 'notDetermined',
+        'isServicesDisabled': false,
         'nativeStatus': nativeStatus,
         'platform': 'iOS'
       };
     } else if (Platform.isAndroid) {
+      // Kiểm tra Location Services có bật không
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      
+      // TRƯỜNG HỢP 1: Location Services bị tắt
+      if (!serviceEnabled) {
+        return {
+          'hasPermission': false,
+          'isPermanentlyDenied': false,
+          'isNotDetermined': false,
+          'isServicesDisabled': true,
+          'status': 'services_disabled',
+          'platform': 'Android'
+        };
+      }
+      
       final status = await Permission.locationWhenInUse.status;
       return {
         'hasPermission': status.isGranted,
         'isPermanentlyDenied': status.isPermanentlyDenied,
         'isNotDetermined': status.isDenied && !status.isPermanentlyDenied,
+        'isServicesDisabled': false,
         'status': status.toString(),
         'platform': 'Android'
       };
@@ -190,6 +315,7 @@ class LocationPermissionManager {
       'hasPermission': false,
       'isPermanentlyDenied': false,
       'isNotDetermined': false,
+      'isServicesDisabled': false,
       'platform': 'Unknown'
     };
   }
@@ -215,12 +341,7 @@ class LocationPermissionManager {
     }
   }
 
-  /// Reset trạng thái đã xin quyền (để test)
-  static Future<void> resetRequestedStatus() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_hasRequestedOnceKey);
-    print('📍 Reset trạng thái đã xin quyền');
-  }
+
 
   /// Hiển thị dialog location service disabled một lần duy nhất
   static Future<void> showLocationServiceDisabledDialog(BuildContext context) async {
@@ -290,12 +411,10 @@ class LocationPermissionManager {
   /// Lấy debug info
   static Future<Map<String, dynamic>> getDebugInfo() async {
     final prefs = await SharedPreferences.getInstance();
-    final hasRequestedOnce = prefs.getBool(_hasRequestedOnceKey) ?? false;
     final hasShownDialog = prefs.getBool(_hasShownLocationDisabledDialogKey) ?? false;
     final permissionStatus = await getLocationPermissionStatus();
     
     return {
-      'hasRequestedOnce': hasRequestedOnce,
       'hasShownLocationDisabledDialog': hasShownDialog,
       'locationDialogShownInMemory': _locationDialogShown,
       'permissionStatus': permissionStatus,

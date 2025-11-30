@@ -32,6 +32,21 @@ class NativePermissionService {
 
   // MARK: - Location Permission Methods
 
+  /// Kiểm tra xem Location Services có được bật trên thiết bị không
+  static Future<bool> checkLocationServicesEnabled() async {
+    try {
+      final bool result = await _channel.invokeMethod('checkLocationServicesEnabled');
+      print("🌍 Dart: Location Services enabled: $result");
+      return result;
+    } on PlatformException catch (e) {
+      print("🌍 Dart: Failed to check location services - Code: ${e.code}, Message: '${e.message}'");
+      return false;
+    } catch (e) {
+      print("🌍 Dart: Unexpected error checking location services: $e");
+      return false;
+    }
+  }
+
   static Future<bool> requestLocationPermissionNative() async {
     try {
       print("🌍 Dart: Calling native location permission request...");

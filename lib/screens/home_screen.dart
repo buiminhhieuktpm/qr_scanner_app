@@ -14,7 +14,7 @@ class HomeScreen extends StatefulWidget {
   _HomeScreenState createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final GlobalKey qrKey = GlobalKey(debugLabel: 'QR');
   QRViewController? controller;
   bool scanned = false;
@@ -26,7 +26,24 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Thêm observer để lắng nghe app lifecycle
+    WidgetsBinding.instance.addObserver(this);
     _initializeApp();
+  }
+  
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    
+    if (state == AppLifecycleState.resumed) {
+      print('📱 [HOME] App resumed - kiểm tra lại quyền vị trí');
+      // Đồng bộ cookies trước
+      _globalCookieManager.syncCookiesAcrossWebViews().catchError((e) {
+        print('❌ Lỗi khi đồng bộ cookies: $e');
+      });
+      // Kiểm tra quyền vị trí
+      _checkLocationPermissionOnStart();
+    }
   }
   
   Future<void> _initializeApp() async {
@@ -39,19 +56,55 @@ class _HomeScreenState extends State<HomeScreen> {
       print('❌ Lỗi khi khởi tạo global cookies: $e');
     }
     
-    // Kiểm tra quyền vị trí
-    _checkLocationPermissionOnStart();
+    // Kiểm tra quyền vị trí mỗi lần mở app
+    print('🚀 [HOME] Ứng dụng đang khởi động - kiểm tra quyền vị trí...');
+    await _checkLocationPermissionOnStart();
   }
 
-  // Kiểm tra quyền vị trí đơn giản (không cần dialog)
+  // Kiểm tra quyền vị trí mỗi lần mở app
   Future<void> _checkLocationPermissionOnStart() async {
-    // Với phiên bản đơn giản, chỉ log trạng thái
-    final hasPermission = await LocationPermissionManager.hasLocationPermission();
-    print('📍 [HOME] Trạng thái quyền vị trí: ${hasPermission ? "Có" : "Không có"}');
+    try {
+      print('📍 [HOME] Kiểm tra quyền vị trí khi mở app...');
+      
+      // Lấy trạng thái chi tiết
+      final status = await LocationPermissionManager.getLocationPermissionStatus();
+      print('📍 [HOME] Chi tiết trạng thái: $status');
+      
+      final hasPermission = status['hasPermission'] ?? false;
+      final isServicesDisabled = status['isServicesDisabled'] ?? false;
+      final isNotDetermined = status['isNotDetermined'] ?? false;
+      
+      if (hasPermission) {
+        print('✅ [HOME] Đã có quyền vị trí');
+      } else if (isServicesDisabled) {
+        print('⚠️ [HOME] Location Services bị tắt');
+        // Hiển thị dialog nếu Location Services bị tắt
+        if (mounted) {
+          await LocationPermissionManager.showLocationServiceDisabledDialog(context);
+        }
+      } else if (isNotDetermined) {
+        // Trạng thái "Ask Next Time" hoặc chưa quyết định → XIN QUYỀN TRỰC TIẾP (chỉ popup hệ thống)
+        print('🔔 [HOME] Quyền chưa xác định (Ask Next Time) - xin quyền ngay...');
+        final result = await LocationPermissionManager.requestPermissionSilently();
+        print('📍 [HOME] Kết quả xin quyền: $result');
+        
+        if (result != null && result['hasPermission'] == true) {
+          print('✅ [HOME] Đã được cấp quyền vị trí');
+        } else {
+          print('❌ [HOME] Không được cấp quyền vị trí');
+        }
+      } else {
+        print('❌ [HOME] Không có quyền vị trí');
+      }
+    } catch (e) {
+      print('❌ [HOME] Lỗi khi kiểm tra quyền vị trí: $e');
+    }
   }
 
   @override
   void dispose() {
+    // Remove lifecycle observer
+    WidgetsBinding.instance.removeObserver(this);
     controller?.dispose();
     super.dispose();
   }
@@ -104,7 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
             context: context,
             builder: (context) => AlertDialog(
               title: const Text('Cần quyền Camera'),
-              content: Text('Quyền camera bị từ chối.\n\nCách cấp quyền:\n1. Vào Cài đặt iPhone\n2. Tìm app "QR Scanner App"\n3. Bật Camera\n\nHoặc vào: Cài đặt > Quyền riêng tư & Bảo mật > Camera'),
+              content: const Text('Quyền camera bị từ chối.\n\nCách cấp quyền:\n1. Vào Cài đặt iPhone\n2. Tìm app "QR Scanner App"\n3. Bật Camera\n\nHoặc vào: Cài đặt > Quyền riêng tư & Bảo mật > Camera'),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
@@ -189,7 +242,7 @@ class _HomeScreenState extends State<HomeScreen> {
         print('🍪 Đang rời khỏi tab tài khoản - force save tất cả cookies');
         await _globalCookieManager.forceSaveAllCookies();
         // Thêm delay nhỏ để đảm bảo cookies được lưu hoàn toàn
-        await Future.delayed(Duration(milliseconds: 500));
+        await Future.delayed(const Duration(milliseconds: 500));
       }
       
       await _globalCookieManager.syncCookiesAcrossWebViews();
@@ -246,8 +299,8 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       // Chỉ còn WebView, KHÔNG còn Stack và nút "Quét" nổi nữa
       return const WebViewScreen(
-        key: ValueKey('https://maqr.vn/vnptcheck/#/app'),
-        url: 'https://maqr.vn/vnptcheck/#/app',
+        key: ValueKey('https://maqr.vn/#/app'),
+        url: 'https://maqr.vn/#/app',
         showAppBar: false,
       );
     }
@@ -267,8 +320,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             _buildHome(),
             const WebViewScreen(
-              key: ValueKey('https://maqr.vn/vnptcheck/#/taikhoan'),
-              url: 'https://maqr.vn/vnptcheck/#/taikhoan',
+              key: ValueKey('https://maqr.vn/#/taikhoan'),
+              url: 'https://maqr.vn/#/taikhoan',
               showAppBar: false,
             ),
           ],

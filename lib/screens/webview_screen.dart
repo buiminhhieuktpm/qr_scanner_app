@@ -35,6 +35,8 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
   Timer? _cookieSaveTimer;
   bool _isCheckingLocation = false; // Cờ để tránh check location đồng thời
   final GlobalCookieManager _globalCookieManager = GlobalCookieManager();
+  double _loadingProgress = 0; // Thêm biến theo dõi progress
+  bool _isPageLoaded = false; // Thêm biến theo dõi page đã load xong chưa
 
   @override
   void initState() {
@@ -107,6 +109,8 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
       case AppLifecycleState.paused:
         print('📱 App đã bị tạm dừng - lưu cookies ngay lập tức');
         _saveCurrentCookies();
+        // Dừng location tracking khi app pause
+        _locationTimer?.cancel();
         break;
       case AppLifecycleState.inactive:
         print('📱 App không hoạt động - lưu cookies ngay lập tức');
@@ -115,10 +119,13 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
       case AppLifecycleState.detached:
         print('📱 App đã bị detached - lưu cookies cuối cùng');
         _saveCurrentCookies();
+        _locationTimer?.cancel();
         break;
       case AppLifecycleState.resumed:
-        print('📱 App đã được resume - load cookies');
+        print('📱 App đã được resume - load cookies và kiểm tra lại quyền vị trí');
         _loadCurrentCookies();
+        // Kiểm tra lại quyền vị trí khi app resume
+        _checkLocationPermission();
         break;
       case AppLifecycleState.hidden:
         print('📱 App đã bị ẩn - lưu cookies');
@@ -141,21 +148,32 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
     }
   }
 
-  // Kiểm tra quyền vị trí đơn giản
+  // Kiểm tra quyền vị trí và bắt đầu tracking nếu có quyền
   Future<void> _checkLocationPermission() async {
     try {
-      print('🔍 Kiểm tra quyền vị trí...');
+      print('🔍 [WEBVIEW] Kiểm tra quyền vị trí...');
       
-      final hasPermission = await LocationPermissionManager.hasLocationPermission();
+      // Lấy trạng thái chi tiết
+      final status = await LocationPermissionManager.getLocationPermissionStatus();
+      final hasPermission = status['hasPermission'] ?? false;
+      final isServicesDisabled = status['isServicesDisabled'] ?? false;
+      
+      print('🔍 [WEBVIEW] Chi tiết trạng thái: $status');
+      
       if (hasPermission) {
-        print('✅ Đã có quyền vị trí, bắt đầu tracking');
+        print('✅ [WEBVIEW] Đã có quyền vị trí, bắt đầu tracking');
         _startLocationTracking();
+      } else if (isServicesDisabled) {
+        print('⚠️ [WEBVIEW] Location Services bị tắt');
+        // Hiển thị dialog một lần
+        if (mounted) {
+          await LocationPermissionManager.showLocationServiceDisabledDialog(context);
+        }
       } else {
-        print('⚠️ Không có quyền vị trí');
-        // Không làm gì thêm - chỉ xin quyền lần đầu tiên mở app
+        print('❌ [WEBVIEW] Không có quyền vị trí');
       }
     } catch (e) {
-      print('💥 Lỗi khi kiểm tra quyền vị trí: $e');
+      print('💥 [WEBVIEW] Lỗi khi kiểm tra quyền vị trí: $e');
     }
   }
 
@@ -494,6 +512,12 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
     // Gửi location ngay lập tức
     _checkCurrentLocation();
   }
+  
+  void _stopLocationTracking() {
+    print('🛑 Dừng location tracking');
+    _locationTimer?.cancel();
+    _locationTimer = null;
+  }
 
   void _checkCurrentLocation() async {
     if (_isCheckingLocation) {
@@ -506,15 +530,7 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
     try {
       print('📍 Đang lấy vị trí hiện tại...');
       
-      // Kiểm tra lại quyền trước khi lấy vị trí
-      bool hasPermission = await LocationPermissionManager.hasLocationPermission();
-      if (!hasPermission) {
-        print('❌ Không có quyền vị trí, dừng tracking');
-        _locationTimer?.cancel();
-        return;
-      }
-      
-      // Kiểm tra dịch vụ vị trí có được bật không
+      // Kiểm tra dịch vụ vị trí có được bật không (kiểm tra trước)
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         print('⚠️ Dịch vụ vị trí bị tắt, không thể lấy vị trí');
@@ -523,6 +539,23 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
         if (mounted) {
           await LocationPermissionManager.showLocationServiceDisabledDialog(context);
         }
+        
+        // Dừng tracking tạm thời, sẽ được bật lại khi app resume
+        _stopLocationTracking();
+        return;
+      }
+      
+      // Kiểm tra lại quyền trước khi lấy vị trí
+      bool hasPermission = await LocationPermissionManager.hasLocationPermission();
+      if (!hasPermission) {
+        print('❌ Không có quyền vị trí');
+        
+        // Kiểm tra chi tiết để biết lý do
+        final status = await LocationPermissionManager.getLocationPermissionStatus();
+        print('📍 Chi tiết trạng thái: $status');
+        
+        // Dừng tracking tạm thời
+        _stopLocationTracking();
         return;
       }
       
@@ -886,7 +919,7 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
       print('🧪 Test cookie functionality...');
       
       final cookieManager = CookieManager.instance();
-      final testCookieName = 'qr_scanner_test_cookie';
+      const testCookieName = 'qr_scanner_test_cookie';
       final testCookieValue = 'test_value_${DateTime.now().millisecondsSinceEpoch}';
       
       // Set test cookie
@@ -977,7 +1010,10 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
               ),
             )
           : null,
-      body: InAppWebView(
+      backgroundColor: Colors.white, // Đặt màu nền trắng để dễ thấy vấn đề
+      body: Stack(
+        children: [
+          InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(widget.url)),
         initialSettings: InAppWebViewSettings(
           // Cookie settings - quan trọng cho cả Android và iOS
@@ -1011,6 +1047,10 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           
           // Headers để đảm bảo cookie được gửi
           userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36 QRScannerApp/1.0',
+          
+          // Fix màn hình đen
+          transparentBackground: false,
+          useHybridComposition: true, // Quan trọng để tránh màn hình đen trên Android
         ),
         onWebViewCreated: (controller) async {
           webViewController = controller;
@@ -1035,6 +1075,11 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
         onLoadStop: (controller, url) async {
           print('📄 Page load hoàn thành: $url');
           
+          setState(() {
+            _isPageLoaded = true;
+            _loadingProgress = 1.0;
+          });
+          
           // Test cookie functionality
           await testCookieFunctionality(uri);
           
@@ -1054,6 +1099,12 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           if (!_isCheckingLocation) {
             _checkCurrentLocation();
           }
+        },
+        onProgressChanged: (controller, progress) {
+          print('📊 Loading progress: $progress%');
+          setState(() {
+            _loadingProgress = progress / 100;
+          });
         },
         onLoadStart: (controller, url) async {
           print('📄 Page bắt đầu load: $url');
@@ -1084,17 +1135,99 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           return NavigationActionPolicy.ALLOW;
         },
         onReceivedError: (controller, request, error) async {
-          print('WebView error: ${error.description}');
-          print('Error type: ${error.type}');
-          print('Failed URL: ${request.url}');
+          print('❌ WebView error: ${error.description}');
+          print('❌ Error type: ${error.type}');
+          print('❌ Failed URL: ${request.url}');
           
-          // Thử load lại với HTTP nếu HTTPS fail
-          if (request.url.toString().startsWith('https://')) {
-            final httpUrl = request.url.toString().replaceFirst('https://', 'http://');
-            print('Thử load lại với HTTP: $httpUrl');
-            await controller.loadUrl(urlRequest: URLRequest(url: WebUri(httpUrl)));
+          // Xử lý ERR_NAME_NOT_RESOLVED - có thể do DNS cache hoặc network issue
+          if (error.description.contains('ERR_NAME_NOT_RESOLVED')) {
+            print('🔧 Phát hiện ERR_NAME_NOT_RESOLVED - đang xử lý...');
+            
+            // Clear cache và thử lại
+            await controller.clearCache();
+            print('🗑️ Đã clear cache, đợi 2 giây rồi thử lại...');
+            
+            // Đợi một chút trước khi retry
+            await Future.delayed(const Duration(seconds: 2));
+            
+            // Reload
+            await controller.reload();
+            print('🔄 Đã reload WebView');
+            
+            return; // Không hiển thị error message ngay
+          }
+          
+          // Hiển thị error cho user với các lỗi khác
+          if (mounted) {
+            String errorMessage = 'Lỗi tải trang';
+            
+            if (error.description.contains('ERR_INTERNET_DISCONNECTED')) {
+              errorMessage = 'Không có kết nối internet';
+            } else if (error.description.contains('ERR_CONNECTION_REFUSED')) {
+              errorMessage = 'Không thể kết nối đến máy chủ';
+            } else if (error.description.contains('ERR_CONNECTION_TIMED_OUT')) {
+              errorMessage = 'Kết nối bị timeout';
+            } else {
+              errorMessage = 'Lỗi: ${error.description}';
+            }
+            
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(errorMessage),
+                action: SnackBarAction(
+                  label: 'Thử lại',
+                  onPressed: () {
+                    controller.reload();
+                  },
+                ),
+                duration: const Duration(seconds: 5),
+              ),
+            );
           }
         },
+        onReceivedHttpError: (controller, request, errorResponse) async {
+          print('❌ HTTP error: ${errorResponse.statusCode}');
+          print('❌ Failed URL: ${request.url}');
+          
+          final statusCode = errorResponse.statusCode;
+          if (mounted && statusCode != null && statusCode >= 400) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Lỗi HTTP $statusCode'),
+                action: SnackBarAction(
+                  label: 'Thử lại',
+                  onPressed: () {
+                    controller.reload();
+                  },
+                ),
+              ),
+            );
+          }
+        },
+      ),
+          // Progress indicator
+          if (_loadingProgress < 1.0)
+            LinearProgressIndicator(
+              value: _loadingProgress,
+              backgroundColor: Colors.grey[200],
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+            ),
+          // Loading overlay khi chưa load xong
+          if (!_isPageLoaded)
+            Container(
+              color: Colors.white,
+              child: const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Đang tải trang...', style: TextStyle(fontSize: 16)),
+                  ],
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

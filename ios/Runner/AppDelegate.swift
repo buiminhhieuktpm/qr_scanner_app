@@ -32,6 +32,8 @@ import CoreLocation
         self?.requestLocationPermission(result: result)
       case "getLocationPermissionStatus":
         self?.getLocationPermissionStatus(result: result)
+      case "checkLocationServicesEnabled":
+        self?.checkLocationServicesEnabled(result: result)
       case "openAppSettings":
         self?.openAppSettings(result: result)
       default:
@@ -99,8 +101,21 @@ import CoreLocation
 
   // MARK: - Location Permission Methods
   
+  private func checkLocationServicesEnabled(result: @escaping FlutterResult) {
+    let enabled = CLLocationManager.locationServicesEnabled()
+    print("🌍 Native iOS: Location Services enabled: \(enabled)")
+    result(enabled)
+  }
+  
   private func requestLocationPermission(result: @escaping FlutterResult) {
     print("🌍 Native iOS: Requesting location permission...")
+    
+    // Kiểm tra Location Services có bật không
+    guard CLLocationManager.locationServicesEnabled() else {
+      print("🌍 Native iOS: Location Services bị tắt trên thiết bị")
+      result(false)
+      return
+    }
     
     // Ensure we're on main thread
     DispatchQueue.main.async { [weak self] in
@@ -141,13 +156,23 @@ import CoreLocation
   }
   
   private func getLocationPermissionStatus(result: @escaping FlutterResult) {
+    // Kiểm tra Location Services có bật không
+    let servicesEnabled = CLLocationManager.locationServicesEnabled()
     let status = CLLocationManager.authorizationStatus()
-    print("🌍 Native iOS: Location permission status: \(status.rawValue)")
+    print("🌍 Native iOS: Location Services enabled: \(servicesEnabled), Permission status: \(status.rawValue)")
+    
+    // Nếu Location Services bị tắt, trả về status đặc biệt
+    if !servicesEnabled {
+      result("servicesDisabled")
+      return
+    }
     
     let statusString: String
     switch status {
-    case .authorizedWhenInUse, .authorizedAlways:
-      statusString = "authorized"
+    case .authorizedWhenInUse:
+      statusString = "authorizedWhenInUse"
+    case .authorizedAlways:
+      statusString = "authorizedAlways"
     case .denied:
       statusString = "denied"
     case .restricted:
@@ -163,8 +188,20 @@ import CoreLocation
   
   // MARK: - CLLocationManagerDelegate
   
+  // Delegate method cho iOS 14+
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    let status = manager.authorizationStatus
+    print("🌍 Native iOS: Location authorization changed (iOS 14+) to: \(status.rawValue)")
+    
+    // Ensure callback on main thread
+    DispatchQueue.main.async { [weak self] in
+      self?.handleLocationAuthorizationChange(status: status)
+    }
+  }
+  
+  // Delegate method cho iOS 13 và cũ hơn (backward compatibility)
   func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-    print("🌍 Native iOS: Location authorization changed to: \(status.rawValue)")
+    print("🌍 Native iOS: Location authorization changed (legacy) to: \(status.rawValue)")
     
     // Ensure callback on main thread
     DispatchQueue.main.async { [weak self] in

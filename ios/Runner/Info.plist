@@ -8,8 +8,6 @@
 	<string>Ứng dụng cần truy cập vị trí để hiển thị thông tin địa điểm liên quan đến mã QR được quét</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Ứng dụng cần truy cập vị trí để hiển thị thông tin địa điểm liên quan đến mã QR được quét</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Ứng dụng cần truy cập mạng cục bộ để kết nối với API và xác thực thông tin QR</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
