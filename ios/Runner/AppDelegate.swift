@@ -190,7 +190,7 @@ import CoreLocation
   
   // Delegate method cho iOS 14+
   func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-    let status = manager.authorizationStatus
+    let status = CLLocationManager.authorizationStatus()
     print("🌍 Native iOS: Location authorization changed (iOS 14+) to: \(status.rawValue)")
     
     // Ensure callback on main thread
