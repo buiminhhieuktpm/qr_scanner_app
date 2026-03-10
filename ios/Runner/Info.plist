@@ -27,11 +27,18 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Ứng dụng cần sử dụng camera để quét mã QR</string>
+	<string>This app uses the camera to scan QR codes so users can quickly access product information from QR codes.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Ứng dụng cần truy cập vị trí để hiển thị thông tin địa điểm liên quan đến mã QR được quét</string>
+	<string>This app needs access to your location to display location information related to scanned QR codes.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Ứng dụng cần truy cập vị trí để hiển thị thông tin địa điểm liên quan đến mã QR được quét</string>
+	<string>This app needs access to your location to display location information related to scanned QR codes.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>This app needs local network access to connect Flutter debug service while developing.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dartobservatory._tcp</string>
+		<string>_dartVmService._tcp</string>
+	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

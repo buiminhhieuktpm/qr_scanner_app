@@ -15,6 +15,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _selectedIndex = 1; // 0: History, 1: Home(WebView), 2: QR Scan, 3: Account
   final GlobalCookieManager _globalCookieManager = GlobalCookieManager();
+  String _homeWebViewUrl = 'https://maqr.vn/#/app'; // URL động cho tab Trang chủ
+  final GlobalKey<_DynamicWebViewState> _homeWebViewKey = GlobalKey();
+  DateTime? _lastTabSwitch; // Thời điểm chuyển tab gần nhất
 
   @override
   void initState() {
@@ -102,6 +105,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _onItemTapped(int index) async {
+    print('👆 Tab tapped: $index (current: $_selectedIndex)');
+    
+    // Debounce: Tránh conflict khi chuyển tab quá nhanh (trong vòng 200ms)
+    final now = DateTime.now();
+    if (_lastTabSwitch != null && now.difference(_lastTabSwitch!).inMilliseconds < 200) {
+      print('⚠️ Chuyển tab quá nhanh, chờ một chút...');
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+    _lastTabSwitch = now;
+    
+    // Chỉ reset URL khi đang ở tab Trang chủ và nhấn lại (double tap)
+    if (index == 1 && _selectedIndex == 1) {
+      print('🏠 Double tap Trang chủ - reset về URL mặc định');
+      _homeWebViewKey.currentState?.loadUrl(_homeWebViewUrl, callApi: false);
+      return; // Không cần chuyển tab vì đã ở tab Trang chủ
+    }
+    
     // Đồng bộ cookies trước khi chuyển tab
     try {
       print('🔄 Đồng bộ cookies trước khi chuyển tab từ $_selectedIndex sang $index');
@@ -120,12 +140,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       print('❌ Lỗi khi đồng bộ cookies: $e');
     }
     
+    print('🔄 Setting _selectedIndex to $index');
     setState(() {
       _selectedIndex = index;
     });
+    print('✅ Tab switched to $index');
   }
 
+  // Xử lý khi quét QR thành công
+  void _handleQRScanned(String url) {
+    print('🔍 QR Scanned: $url');
+    // Gọi API để lưu tên sản phẩm đúng
+    _loadUrlInHomeTab(url, callApi: true);
+  }
 
+  // Xử lý khi click vào bản ghi lịch sử
+  void _handleHistoryItemTap(String url) {
+    print('📜 History item tapped: $url');
+    _loadUrlInHomeTab(url, callApi: false);
+  }
+
+  // Hàm chung để load URL vào tab Trang chủ
+  void _loadUrlInHomeTab(String url, {required bool callApi}) {
+    // Cập nhật thời điểm chuyển tab
+    _lastTabSwitch = DateTime.now();
+    
+    // Chuyển về tab Trang chủ TRƯỚC
+    setState(() {
+      _selectedIndex = 1;
+    });
+    
+    // Sau đó mới load URL mới vào WebView
+    // Delay nhỏ để đảm bảo tab đã chuyển xong
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (mounted) {
+        _homeWebViewKey.currentState?.loadUrl(url, callApi: callApi);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -135,20 +187,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           index: _selectedIndex,
           children: [
             HistoryScreen(
-              onUrlTap: (url) {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => WebViewScreen(url: url, showAppBar: true, callApi: false),
-                  ),
-                );
-              },
+              onUrlTap: _handleHistoryItemTap,
             ),
-            const WebViewScreen(
-              key: ValueKey('https://maqr.vn/#/app'),
-              url: 'https://maqr.vn/#/app',
-              showAppBar: false,
+            _DynamicWebView(
+              key: _homeWebViewKey,
+              initialUrl: _homeWebViewUrl,
             ),
-            const QRScanScreen(),
+            _QRScanWrapper(
+              onScanned: _handleQRScanned,
+              isActive: _selectedIndex == 2,
+            ),
             const WebViewScreen(
               key: ValueKey('https://maqr.vn/#/taikhoan'),
               url: 'https://maqr.vn/#/taikhoan',
@@ -181,6 +229,71 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         type: BottomNavigationBarType.fixed,
         selectedItemColor: const Color(0xFF1565C0),
       ),
+    );
+  }
+}
+
+// Wrapper cho QRScanScreen để xử lý callback
+class _QRScanWrapper extends StatelessWidget {
+  final Function(String) onScanned;
+  final bool isActive;
+
+  const _QRScanWrapper({required this.onScanned, required this.isActive});
+
+  @override
+  Widget build(BuildContext context) {
+    return QRScanScreen(onScanned: onScanned, isActive: isActive);
+  }
+}
+
+// DynamicWebView có thể thay đổi URL
+class _DynamicWebView extends StatefulWidget {
+  final String initialUrl;
+
+  const _DynamicWebView({Key? key, required this.initialUrl}) : super(key: key);
+
+  @override
+  _DynamicWebViewState createState() => _DynamicWebViewState();
+}
+
+class _DynamicWebViewState extends State<_DynamicWebView> {
+  late String currentUrl;
+  bool shouldCallApi = false; // Chỉ call API khi load URL từ QR scan
+  bool _isLoading = false;
+  int _loadVersion = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    currentUrl = widget.initialUrl;
+  }
+
+  void loadUrl(String url, {bool callApi = false}) {
+    print('📱 _DynamicWebView.loadUrl: $url (callApi: $callApi)');
+    if (mounted && !_isLoading) {
+      _isLoading = true;
+      setState(() {
+        currentUrl = url;
+        shouldCallApi = callApi;
+        _loadVersion++;
+      });
+      // Reset flag sau khi load xong
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          _isLoading = false;
+        }
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    print('📱 _DynamicWebView.build: currentUrl=$currentUrl, shouldCallApi=$shouldCallApi, loadVersion=$_loadVersion');
+    return WebViewScreen(
+      key: ValueKey('$currentUrl#$_loadVersion'),
+      url: currentUrl,
+      showAppBar: false,
+      callApi: shouldCallApi,
     );
   }
 }

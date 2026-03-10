@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:qr_code_scanner/qr_code_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'webview_screen.dart';
 import '../services/native_permission_service.dart';
 
 class QRScanScreen extends StatefulWidget {
-  const QRScanScreen({super.key});
+  final Function(String)? onScanned;
+  final bool isActive;
+  
+  const QRScanScreen({super.key, this.onScanned, this.isActive = true});
 
   @override
   _QRScanScreenState createState() => _QRScanScreenState();
@@ -14,6 +17,7 @@ class QRScanScreen extends StatefulWidget {
 class _QRScanScreenState extends State<QRScanScreen> {
   final GlobalKey qrKey = GlobalKey(debugLabel: 'QR');
   QRViewController? controller;
+  StreamSubscription<Barcode>? _scanSubscription;
   bool scanned = false;
 
   @override
@@ -24,8 +28,27 @@ class _QRScanScreenState extends State<QRScanScreen> {
 
   @override
   void dispose() {
+    _scanSubscription?.cancel();
     controller?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant QRScanScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.isActive != widget.isActive && controller != null) {
+      if (widget.isActive) {
+        controller!.resumeCamera();
+        if (mounted) {
+          setState(() {
+            scanned = false;
+          });
+        }
+      } else {
+        controller!.pauseCamera();
+      }
+    }
   }
 
   // Kiểm tra và yêu cầu quyền camera
@@ -99,35 +122,46 @@ class _QRScanScreenState extends State<QRScanScreen> {
     }
   }
 
-  void _openWebView(String url, {bool callApi = false}) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => WebViewScreen(url: url, showAppBar: true, callApi: callApi),
-      ),
-    );
+  void _navigateToHomeWithUrl(String url) {
+    // Gọi callback để báo cho HomeScreen load URL mới
+    if (widget.onScanned != null) {
+      widget.onScanned!(url);
+    } else {
+      // Fallback: pop về màn hình trước với URL
+      Navigator.of(context).pop(url);
+    }
   }
 
   void _onQRViewCreated(QRViewController controller) {
+    _scanSubscription?.cancel();
     this.controller = controller;
-    controller.scannedDataStream.listen((scanData) async {
+    if (!widget.isActive) {
+      controller.pauseCamera();
+    }
+
+    _scanSubscription = controller.scannedDataStream.listen((scanData) async {
       if (!scanned) {
         scanned = true;
         await controller.pauseCamera();
 
         String? code = scanData.code;
+        
+        // Tạm thời tắt xử lý scan trùng lặp để cùng một QR/link
+        // vẫn được load lại và đi tiếp luồng lưu history.
+        // if (_lastScannedCode == code &&
+        //     _lastScanTime != null &&
+        //     now.difference(_lastScanTime!) < const Duration(seconds: 2)) {
+        //   print('⏭️ Bỏ qua scan trùng lặp: $code');
+        //   scanned = false;
+        //   controller.resumeCamera();
+        //   return;
+        // }
+        
         bool isUrl = code != null && (code.startsWith('http://') || code.startsWith('https://'));
 
         if (isUrl) {
-          _openWebView(code, callApi: true);
-          // Reset trạng thái sau khi mở webview
-          Future.delayed(const Duration(milliseconds: 500), () {
-            if (mounted) {
-              controller.resumeCamera();
-              setState(() {
-                scanned = false;
-              });
-            }
-          });
+          // Quay về HomeScreen với URL đã quét
+          _navigateToHomeWithUrl(code);
         } else {
           showDialog(
             context: context,
@@ -157,32 +191,9 @@ class _QRScanScreenState extends State<QRScanScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              flex: 4,
-              child: QRView(
-                key: qrKey,
-                onQRViewCreated: _onQRViewCreated,
-              ),
-            ),
-            Expanded(
-              flex: 1,
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: const [
-                    Icon(Icons.qr_code_scanner, size: 48, color: Color(0xFF1565C0)),
-                    SizedBox(height: 8),
-                    Text(
-                      'Đưa mã QR vào khung để quét',
-                      style: TextStyle(fontSize: 16),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
+        child: QRView(
+          key: qrKey,
+          onQRViewCreated: _onQRViewCreated,
         ),
       ),
     );

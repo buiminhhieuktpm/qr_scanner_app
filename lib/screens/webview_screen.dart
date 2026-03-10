@@ -34,6 +34,7 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
   Timer? _locationTimer;
   Timer? _cookieSaveTimer;
   bool _isCheckingLocation = false; // Cờ để tránh check location đồng thời
+  bool _isInjectingLocation = false; // Cờ để tránh inject location đồng thời
   final GlobalCookieManager _globalCookieManager = GlobalCookieManager();
   double _loadingProgress = 0; // Thêm biến theo dõi progress
   bool _isPageLoaded = false; // Thêm biến theo dõi page đã load xong chưa
@@ -520,8 +521,8 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
   }
 
   void _checkCurrentLocation() async {
-    if (_isCheckingLocation) {
-      print('⚠️ Đang check location, bỏ qua lần này');
+    if (_isCheckingLocation || _isInjectingLocation) {
+      print('⏳ Đang xử lý location, bỏ qua lần này');
       return;
     }
     
@@ -567,35 +568,54 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
       
       print('📍 Vị trí hiện tại: ${position.latitude}, ${position.longitude}');
       
-      // Inject vị trí vào JavaScript
-      if (webViewController != null) {
-        await webViewController!.evaluateJavascript(source: '''
-          try {
-            if (typeof window.locationData === 'undefined') {
-              window.locationData = {};
-            }
-            window.locationData.latitude = ${position.latitude};
-            window.locationData.longitude = ${position.longitude};
-            window.locationData.accuracy = ${position.accuracy};
-            window.locationData.timestamp = ${position.timestamp.millisecondsSinceEpoch};
-            
-            console.log('Location injected:', window.locationData);
-            
-            // Trigger location update event nếu có
-            if (typeof window.onLocationUpdate === 'function') {
-              window.onLocationUpdate(window.locationData);
-            }
-            
-            // Dispatch custom event
-            window.dispatchEvent(new CustomEvent('locationupdate', { 
-              detail: window.locationData 
-            }));
-          } catch (e) {
-            console.error('Error injecting location:', e);
-          }
-        ''');
-        
-        print('✅ Đã inject vị trí vào WebView');
+      // Inject vị trí vào JavaScript với debounce và wrap trong setTimeout
+      if (webViewController != null && !_isInjectingLocation) {
+        _isInjectingLocation = true;
+        try {
+          await webViewController!.evaluateJavascript(source: '''
+            (function() {
+              try {
+                // Chỉ inject nếu chưa có hoặc timestamp mới hơn
+                if (!window.locationData || 
+                    !window.locationData.timestamp ||
+                    window.locationData.timestamp < ${position.timestamp.millisecondsSinceEpoch}) {
+                  
+                  window.locationData = {
+                    latitude: ${position.latitude},
+                    longitude: ${position.longitude},
+                    accuracy: ${position.accuracy},
+                    timestamp: ${position.timestamp.millisecondsSinceEpoch}
+                  };
+                  
+                  console.log('Location injected:', window.locationData);
+                  
+                  // Wrap events trong setTimeout để tránh AngularJS digest conflicts
+                  setTimeout(function() {
+                    try {
+                      if (typeof window.onLocationUpdate === 'function') {
+                        window.onLocationUpdate(window.locationData);
+                      }
+                      
+                      window.dispatchEvent(new CustomEvent('locationupdate', { 
+                        detail: window.locationData 
+                      }));
+                    } catch (e) {
+                      console.error('Error triggering location events:', e);
+                    }
+                  }, 100);
+                }
+              } catch (e) {
+                console.error('Error injecting location:', e);
+              }
+            })();
+          ''');
+          
+          print('✅ Đã inject vị trí vào WebView');
+        } finally {
+          // Delay reset flag để tránh inject quá nhanh
+          await Future.delayed(const Duration(milliseconds: 300));
+          _isInjectingLocation = false;
+        }
       }
       
     } catch (e) {
@@ -1074,6 +1094,8 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
         },
         onLoadStop: (controller, url) async {
           print('📄 Page load hoàn thành: $url');
+          print('📱 Current URL: ${await controller.getUrl()}');
+          print('📝 Page title: ${await controller.getTitle()}');
           
           setState(() {
             _isPageLoaded = true;
@@ -1133,6 +1155,9 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           
           // Cho phép navigation bình thường
           return NavigationActionPolicy.ALLOW;
+        },
+        onConsoleMessage: (controller, consoleMessage) {
+          print('🌐 [WEB CONSOLE] ${consoleMessage.messageLevel}: ${consoleMessage.message}');
         },
         onReceivedError: (controller, request, error) async {
           print('❌ WebView error: ${error.description}');
