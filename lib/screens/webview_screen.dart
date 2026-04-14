@@ -31,6 +31,7 @@ class WebViewScreen extends StatefulWidget {
 
 class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserver {
   InAppWebViewController? webViewController;
+  PullToRefreshController? _pullToRefreshController;
   Timer? _locationTimer;
   Timer? _cookieSaveTimer;
   bool _isCheckingLocation = false; // Cờ để tránh check location đồng thời
@@ -45,6 +46,22 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
     
     // Thêm observer để lắng nghe app lifecycle
     WidgetsBinding.instance.addObserver(this);
+
+    // Khởi tạo PullToRefreshController
+    _pullToRefreshController = PullToRefreshController(
+      settings: PullToRefreshSettings(
+        color: const Color(0xFF1565C0),
+      ),
+      onRefresh: () async {
+        print('🔄 Pull-to-refresh: đang reload trang...');
+        if (webViewController != null) {
+          await webViewController!.reload();
+        } else {
+          // Nếu chưa có controller, dừng refresh indicator
+          _pullToRefreshController?.endRefreshing();
+        }
+      },
+    );
     
     // Load global cookies trước khi khởi tạo WebView
     _initializeGlobalCookies();
@@ -996,6 +1013,7 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
     // Cancel timers
     _locationTimer?.cancel();
     _cookieSaveTimer?.cancel();
+    _pullToRefreshController?.dispose();
     
     // Force save tất cả cookies trước khi dispose
     if (webViewController != null) {
@@ -1034,11 +1052,12 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
       body: Stack(
         children: [
           InAppWebView(
+        pullToRefreshController: _pullToRefreshController,
         initialUrlRequest: URLRequest(url: WebUri(widget.url)),
         initialSettings: InAppWebViewSettings(
-          // Cookie settings - quan trọng cho cả Android và iOS
-          cacheEnabled: true,
-          clearCache: false,
+          // Cookie settings - chỉ dùng cookie để duy trì đăng nhập
+          cacheEnabled: false,       // Tắt page cache
+          clearCache: true,          // Xóa cache khi khởi tạo
           sharedCookiesEnabled: true,
           thirdPartyCookiesEnabled: true, // Cho phép third-party cookies
           
@@ -1061,8 +1080,8 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           allowsLinkPreview: true,
           allowingReadAccessTo: WebUri('file://'),
           
-          // Performance
-          cacheMode: CacheMode.LOAD_DEFAULT,
+          // Không dùng cache - luôn fetch mới từ server
+          cacheMode: CacheMode.LOAD_NO_CACHE,
           applicationNameForUserAgent: 'QRScannerApp/1.0',
           
           // Headers để đảm bảo cookie được gửi
@@ -1096,7 +1115,10 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           print('📄 Page load hoàn thành: $url');
           print('📱 Current URL: ${await controller.getUrl()}');
           print('📝 Page title: ${await controller.getTitle()}');
-          
+
+          // Kết thúc pull-to-refresh animation
+          _pullToRefreshController?.endRefreshing();
+
           setState(() {
             _isPageLoaded = true;
             _loadingProgress = 1.0;

@@ -28,10 +28,12 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
+def releaseStoreFile = keystoreProperties['storeFile'] ? rootProject.file(keystoreProperties['storeFile']) : null
+
 android {
     namespace "com.maqrvn.qrscanner"
     compileSdk 35
-    ndkVersion "27.0.12077973"
+    // ndkVersion "27.0.12077973"  // Commented out to use default NDK
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -56,13 +58,17 @@ android {
         targetSdkVersion 35
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
+        
+        ndk {
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86_64'
+        }
     }
 
     signingConfigs {
         release {
             keyAlias keystoreProperties['keyAlias']
             keyPassword keystoreProperties['keyPassword']
-            storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
+            storeFile releaseStoreFile
             storePassword keystoreProperties['storePassword']
         }
     }
@@ -80,4 +86,5 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'history_screen.dart';
 import 'webview_screen.dart';
 import 'qr_scan_screen.dart';
+import 'account_screen.dart';
 import '../services/location_permission_manager.dart';
 import '../services/global_cookie_manager.dart';
 
@@ -17,6 +18,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final GlobalCookieManager _globalCookieManager = GlobalCookieManager();
   String _homeWebViewUrl = 'https://maqr.vn/#/app'; // URL động cho tab Trang chủ
   final GlobalKey<_DynamicWebViewState> _homeWebViewKey = GlobalKey();
+  final GlobalKey<AccountScreenState> _accountWebViewKey = GlobalKey();
   DateTime? _lastTabSwitch; // Thời điểm chuyển tab gần nhất
 
   @override
@@ -122,6 +124,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return; // Không cần chuyển tab vì đã ở tab Trang chủ
     }
     
+    // Double tap Tài khoản → reload trang
+    if (index == 3 && _selectedIndex == 3) {
+      print('👤 Double tap Tài khoản - reload trang');
+      _accountWebViewKey.currentState?.reload();
+      return;
+    }
+    
     // Đồng bộ cookies trước khi chuyển tab
     try {
       print('🔄 Đồng bộ cookies trước khi chuyển tab từ $_selectedIndex sang $index');
@@ -197,10 +206,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onScanned: _handleQRScanned,
               isActive: _selectedIndex == 2,
             ),
-            const WebViewScreen(
-              key: ValueKey('https://maqr.vn/#/taikhoan'),
-              url: 'https://maqr.vn/#/taikhoan',
-              showAppBar: false,
+            AccountScreen(
+              key: _accountWebViewKey,
             ),
           ],
         ),

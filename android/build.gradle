@@ -9,25 +9,12 @@ buildscript {
         classpath 'com.android.tools.build:gradle:8.10.1'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
-    
-    // Configure all projects to use Java 17
-    project.tasks.withType(JavaCompile) {
-        options.compilerArgs += ["-Xlint:-options"]
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
 }
 
 allprojects {
     repositories {
         google()
         mavenCentral()
-    }
-    
-    tasks.withType(JavaCompile) {
-        options.compilerArgs += ["-Xlint:-options"]
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
@@ -37,6 +24,48 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(':app')
+}
+
+// Workaround for Flutter plugins not specifying namespace in AGP 8+ and forcing Java 17
+subprojects {
+    def configureAndroid = { project ->
+        if (project.hasProperty("android")) {
+            project.android {
+                if (namespace == null) {
+                    def manifestFile = project.android.sourceSets.main.manifest.srcFile
+                    if (manifestFile.exists()) {
+                        def manifest = new XmlSlurper().parse(file(manifestFile))
+                        def packageName = manifest.@package.text()
+                        namespace packageName
+                    }
+                }
+                
+                compileOptions {
+                    sourceCompatibility JavaVersion.VERSION_17
+                    targetCompatibility JavaVersion.VERSION_17
+                }
+            }
+        }
+    }
+
+    if (project.state.executed) {
+        configureAndroid(project)
+    } else {
+        project.afterEvaluate(configureAndroid)
+    }
+    
+    // Ensure Kotlin also targets 17
+    project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            jvmTarget = "17"
+        }
+    }
+    
+    // Ensure Java tasks target 17 (fallback for non-android)
+    project.tasks.withType(JavaCompile).configureEach {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
 }
 
 tasks.register("clean", Delete) {

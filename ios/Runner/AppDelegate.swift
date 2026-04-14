@@ -12,8 +12,10 @@ import CoreLocation
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    
-    let controller : FlutterViewController = window?.rootViewController as! FlutterViewController
+    guard let controller = window?.rootViewController as? FlutterViewController else {
+      GeneratedPluginRegistrant.register(with: self)
+      return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
     let nativeChannel = FlutterMethodChannel(name: "native_permissions",
                                            binaryMessenger: controller.binaryMessenger)
     
