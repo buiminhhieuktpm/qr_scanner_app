@@ -142,6 +142,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // Thêm delay nhỏ để đảm bảo cookies được lưu hoàn toàn
         await Future.delayed(const Duration(milliseconds: 500));
       }
+
+      // Nếu đang chuyển TỚI tab tài khoản (index 3) từ tab khác,
+      // force save cookies từ tab đang active rồi reload AccountScreen
+      if (index == 3 && _selectedIndex != 3) {
+        print('🍪 Chuyển sang tab Tài khoản - force save + sync + reload Account');
+        await _globalCookieManager.forceSaveAllCookies();
+        await _globalCookieManager.syncCookiesAcrossWebViews();
+        setState(() { _selectedIndex = index; });
+        Future.delayed(const Duration(milliseconds: 300), () {
+          _accountWebViewKey.currentState?.syncAndReload();
+        });
+        return;
+      }
       
       await _globalCookieManager.syncCookiesAcrossWebViews();
       print('✅ Hoàn thành đồng bộ cookies khi chuyển tab');

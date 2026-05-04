@@ -642,6 +642,73 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
     }
   }
 
+  // Lưu localStorage của trang hiện tại vào SharedPreferences để chia sẻ với AccountScreen
+  Future<void> _saveLocalStorage(InAppWebViewController controller) async {
+    try {
+      final result = await controller.evaluateJavascript(source: '''
+        (function() {
+          try {
+            var items = {};
+            for (var i = 0; i < localStorage.length; i++) {
+              var key = localStorage.key(i);
+              items[key] = localStorage.getItem(key);
+            }
+            return JSON.stringify(items);
+          } catch(e) { return null; }
+        })();
+      ''');
+      if (result != null && result.toString() != 'null' && result.toString().length > 2) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('maqr_local_storage', result.toString());
+        print('💾 [WEBVIEW] Đã lưu localStorage (${result.toString().length} chars)');
+      }
+    } catch (e) {
+      print('❌ [WEBVIEW] Lỗi lưu localStorage: $e');
+    }
+  }
+
+  Future<void> _injectLogoutDetectorJS(InAppWebViewController controller) async {
+    try {
+      await controller.evaluateJavascript(source: '''
+        (function() {
+          if (window.__logoutDetectorInjected) return;
+          window.__logoutDetectorInjected = true;
+
+          function attachLogoutListener() {
+            var btns = document.querySelectorAll('a[ng-click="cl_dangxuat()"]');
+            btns.forEach(function(btn) {
+              if (!btn.__logoutListenerAttached) {
+                btn.__logoutListenerAttached = true;
+                btn.addEventListener('click', function() {
+                  console.log('[LOGOUT] Nut dang xuat duoc nhan');
+                  if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                    window.flutter_inappwebview.callHandler('onLogout');
+                  }
+                }, true);
+                console.log('[LOGOUT] Da gan listener vao nut dang xuat');
+              }
+            });
+          }
+
+          attachLogoutListener();
+
+          var observer = new MutationObserver(function() {
+            attachLogoutListener();
+          });
+          observer.observe(document.body || document.documentElement, {
+            childList: true,
+            subtree: true
+          });
+
+          console.log('[LOGOUT] Logout detector injected');
+        })();
+      ''');
+      print('✅ [WEBVIEW] Đã inject logout detector JS');
+    } catch (e) {
+      print('❌ [WEBVIEW] Lỗi inject logout detector JS: \$e');
+    }
+  }
+
   Future<void> _injectLocationHelpers() async {
     if (webViewController == null) return;
     
@@ -1056,8 +1123,8 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
         initialUrlRequest: URLRequest(url: WebUri(widget.url)),
         initialSettings: InAppWebViewSettings(
           // Cookie settings - chỉ dùng cookie để duy trì đăng nhập
-          cacheEnabled: false,       // Tắt page cache
-          clearCache: true,          // Xóa cache khi khởi tạo
+          cacheEnabled: true,
+          clearCache: false,
           sharedCookiesEnabled: true,
           thirdPartyCookiesEnabled: true, // Cho phép third-party cookies
           
@@ -1104,6 +1171,17 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
               return 'Cookies saved';
             },
           );
+
+          // Đăng ký handler cho sự kiện đăng xuất từ JS
+          controller.addJavaScriptHandler(
+            handlerName: 'onLogout',
+            callback: (args) async {
+              print('🚪 [WEBVIEW] Nhận sự kiện đăng xuất từ WebView');
+              await _globalCookieManager.clearAllCookiesAndStorage();
+              print('✅ [WEBVIEW] Đã xóa toàn bộ cookies sau đăng xuất');
+              return 'Logged out';
+            },
+          );
           
           await loadCookies(uri);
           // Debug cookies sau khi load
@@ -1138,7 +1216,13 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           
           // Re-inject location helpers sau khi page load xong
           await _injectLocationHelpers();
-          
+
+          // Inject JS để bắt sự kiện nút đăng xuất
+          await _injectLogoutDetectorJS(controller);
+
+          // Lưu localStorage để AccountScreen có thể sử dụng
+          await _saveLocalStorage(controller);
+
           // Inject vị trí hiện tại nếu có
           if (!_isCheckingLocation) {
             _checkCurrentLocation();

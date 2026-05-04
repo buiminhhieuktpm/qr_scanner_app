@@ -14,37 +14,42 @@ class GlobalCookieManager {
   Future<void> saveGlobalCookies() async {
     try {
       print('🌐 Saving global cookies for $_baseDomain...');
-      
+
       final cookieManager = CookieManager.instance();
-      final baseUri = Uri.parse('https://$_baseDomain');
-      final cookies = await cookieManager.getCookies(url: WebUri(baseUri.toString()));
-      
-      if (cookies.isEmpty) {
+      // Đọc cookies từ tất cả các URL có thể chứa session maqr.vn
+      final readUrls = [
+        'https://maqr.vn',
+        'https://maqr.vn/vnptcheck/',
+        'https://maqr.vn/b/',
+      ];
+      final allCookies = <String, Map<String, dynamic>>{};
+      for (final url in readUrls) {
+        final cookies = await cookieManager.getCookies(url: WebUri(url));
+        for (final cookie in cookies) {
+          final key = '${cookie.name}_${cookie.domain ?? _baseDomain}';
+          allCookies[key] = {
+            'name': cookie.name,
+            'value': cookie.value,
+            'domain': cookie.domain ?? _baseDomain,
+            'path': cookie.path ?? '/',
+            'secure': cookie.isSecure ?? false,
+            'httpOnly': cookie.isHttpOnly ?? false,
+            'sameSite': cookie.sameSite?.toString() ?? 'Lax',
+            'expiresDate': cookie.expiresDate,
+          };
+        }
+      }
+
+      if (allCookies.isEmpty) {
         print('⚠️ No cookies to save globally');
         return;
       }
-      
+
       final prefs = await SharedPreferences.getInstance();
-      
-      // Tạo cookie list với thông tin đầy đủ
-      final cookieList = <Map<String, dynamic>>[];
-      for (var cookie in cookies) {
-        cookieList.add({
-          'name': cookie.name,
-          'value': cookie.value,
-          'domain': cookie.domain ?? _baseDomain,
-          'path': cookie.path ?? '/',
-          'secure': cookie.isSecure ?? false,
-          'httpOnly': cookie.isHttpOnly ?? false,
-          'sameSite': cookie.sameSite?.toString() ?? 'Lax',
-          'expiresDate': cookie.expiresDate,
-        });
-      }
-      
-      final cookieJson = jsonEncode(cookieList);
+      final cookieJson = jsonEncode(allCookies.values.toList());
       await prefs.setString(_globalCookieKey, cookieJson);
-      
-      print('✅ Saved ${cookies.length} global cookies');
+
+      print('✅ Saved ${allCookies.length} global cookies');
     } catch (e) {
       print('❌ Error saving global cookies: $e');
     }
@@ -72,6 +77,9 @@ class GlobalCookieManager {
         'https://maqr.vn/vnptcheck/',
         'https://maqr.vn/vnptcheck/#/app',
         'https://maqr.vn/vnptcheck/#/taikhoan',
+        'https://maqr.vn/b/',
+        'https://maqr.vn/b/#/taikhoan',
+        'https://maqr.vn/b/#/app',
       ];
       
       int loadedCount = 0;
@@ -139,6 +147,9 @@ class GlobalCookieManager {
         'https://maqr.vn/vnptcheck/',
         'https://maqr.vn/vnptcheck/#/app',
         'https://maqr.vn/vnptcheck/#/taikhoan',
+        'https://maqr.vn/b/',
+        'https://maqr.vn/b/#/taikhoan',
+        'https://maqr.vn/b/#/app',
       ];
       
       // Lấy cookies từ tất cả URLs
@@ -223,6 +234,32 @@ class GlobalCookieManager {
       print('✅ All global cookies cleared');
     } catch (e) {
       print('❌ Error clearing global cookies: $e');
+    }
+  }
+
+  // Xóa toàn bộ cookies và storage khi đăng xuất
+  Future<void> clearAllCookiesAndStorage() async {
+    try {
+      print('🗑️ [LOGOUT] Xóa toàn bộ cookies sau khi đăng xuất...');
+
+      final prefs = await SharedPreferences.getInstance();
+      // Xóa global cookie key
+      await prefs.remove(_globalCookieKey);
+      // Xóa các domain-specific cookie keys
+      final keys = Set<String>.from(prefs.getKeys());
+      for (final key in keys) {
+        if (key.startsWith('cookies')) {
+          await prefs.remove(key);
+        }
+      }
+
+      // Xóa tất cả cookies trong WebView
+      final cookieManager = CookieManager.instance();
+      await cookieManager.deleteAllCookies();
+
+      print('✅ [LOGOUT] Đã xóa toàn bộ cookies');
+    } catch (e) {
+      print('❌ [LOGOUT] Lỗi xóa cookies: $e');
     }
   }
 

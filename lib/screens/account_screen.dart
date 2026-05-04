@@ -22,9 +22,25 @@ class AccountScreenState extends State<AccountScreen>
   double _loadingProgress = 0.0;
   bool _isRefreshing = false;
   final GlobalCookieManager _globalCookieManager = GlobalCookieManager();
+  bool _lsInjectedOnLoad = false; // tránh reload vô hạn khi inject localStorage
 
   // Gọi từ bên ngoài (double-tap tab) hoặc từ JS handler
   void reload() => _refresh();
+
+  // Gọi từ HomeScreen khi switch sang tab Tài khoản để đảm bảo cookies mới nhất
+  Future<void> syncAndReload() async {
+    print('🔄 [ACCOUNT] syncAndReload: đồng bộ cookies + localStorage rồi reload...');
+    try {
+      await _globalCookieManager.loadGlobalCookies();
+    } catch (e) {
+      print('❌ [ACCOUNT] Lỗi load global cookies: $e');
+    }
+    if (_webViewController != null) {
+      await _injectLocalStorage(_webViewController!);
+      _lsInjectedOnLoad = true; // đã inject, onLoadStop sẽ không inject lại
+    }
+    _refresh();
+  }
 
   Future<void> _refresh() async {
     if (_isRefreshing || _webViewController == null) return;
@@ -200,8 +216,8 @@ class AccountScreenState extends State<AccountScreen>
           pullToRefreshController: _pullToRefreshController,
           initialUrlRequest: URLRequest(url: WebUri(_accountUrl)),
           initialSettings: InAppWebViewSettings(
-            cacheEnabled: false,
-            clearCache: true,
+            cacheEnabled: true,
+            clearCache: false,
             sharedCookiesEnabled: true,
             thirdPartyCookiesEnabled: true,
             domStorageEnabled: true,
@@ -225,8 +241,22 @@ class AccountScreenState extends State<AccountScreen>
           ),
           onWebViewCreated: (controller) async {
             _webViewController = controller;
-            print('🌐 [ACCOUNT] WebView được tạo, đang load cookies...');
-            await _loadCookies();
+            print('🌐 [ACCOUNT] WebView được tạo, load global cookies trước...');
+            // Load global cookies VÀO system store TRƯỚC khi trang bắt đầu load
+            await _globalCookieManager.loadGlobalCookies();
+            // Đăng ký handler cho sự kiện đăng xuất từ JS
+            controller.addJavaScriptHandler(
+              handlerName: 'onLogout',
+              callback: (args) async {
+                print('🚪 [ACCOUNT] Nhận sự kiện đăng xuất từ WebView');
+                await _globalCookieManager.clearAllCookiesAndStorage();
+                // Xóa cả localStorage đã lưu
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.remove('maqr_local_storage');
+                print('✅ [ACCOUNT] Đã xóa toàn bộ cookies sau đăng xuất');
+                return 'Logged out';
+              },
+            );
           },
           onLoadStart: (controller, url) {
             print('📄 [ACCOUNT] Bắt đầu load: $url');
@@ -240,8 +270,22 @@ class AccountScreenState extends State<AccountScreen>
             _pullToRefreshController?.endRefreshing();
             if (mounted) setState(() { _loadingProgress = 1.0; _isRefreshing = false; });
             await _saveCookies();
+            await _saveLocalStorage(controller);
             // Inject JS để detect pull-to-refresh gesture trên trang SPA
             await _injectPullToRefreshJS(controller);
+            // Inject JS để bắt sự kiện nút đăng xuất
+            await _injectLogoutDetectorJS(controller);
+            // Lần đầu load: inject localStorage từ WebViewScreen (nếu có) rồi reload
+            if (!_lsInjectedOnLoad) {
+              _lsInjectedOnLoad = true;
+              final injected = await _injectLocalStorage(controller);
+              if (injected) {
+                // Reload để AngularJS đọc localStorage đã được populate
+                Future.delayed(const Duration(milliseconds: 200), () {
+                  if (mounted) controller.reload();
+                });
+              }
+            }
           },
           onReceivedError: (controller, request, error) async {
             print('❌ [ACCOUNT] Lỗi WebView: ${error.description}');
@@ -325,6 +369,106 @@ class AccountScreenState extends State<AccountScreen>
             ),
       ],
     );
+  }
+
+  /// Inject dữ liệu localStorage từ SharedPreferences vào WebView.
+  /// Trả về true nếu có dữ liệu được inject.
+  Future<bool> _injectLocalStorage(InAppWebViewController controller) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lsData = prefs.getString('maqr_local_storage');
+      if (lsData == null || lsData.isEmpty || lsData == '{}') return false;
+      await controller.evaluateJavascript(source: '''
+        (function() {
+          try {
+            var items = $lsData;
+            var count = 0;
+            for (var key in items) {
+              if (Object.prototype.hasOwnProperty.call(items, key)) {
+                localStorage.setItem(key, items[key]);
+                count++;
+              }
+            }
+            console.log('[ACCOUNT] Injected ' + count + ' localStorage items');
+          } catch(e) {
+            console.error('[ACCOUNT] localStorage inject error:', e);
+          }
+        })();
+      ''');
+      print('✅ [ACCOUNT] Đã inject localStorage (${lsData.length} chars)');
+      return true;
+    } catch (e) {
+      print('❌ [ACCOUNT] Lỗi inject localStorage: $e');
+      return false;
+    }
+  }
+
+  /// Lưu localStorage của trang hiện tại vào SharedPreferences.
+  Future<void> _saveLocalStorage(InAppWebViewController controller) async {
+    try {
+      final result = await controller.evaluateJavascript(source: '''
+        (function() {
+          try {
+            var items = {};
+            for (var i = 0; i < localStorage.length; i++) {
+              var key = localStorage.key(i);
+              items[key] = localStorage.getItem(key);
+            }
+            return JSON.stringify(items);
+          } catch(e) { return null; }
+        })();
+      ''');
+      if (result != null && result.toString() != 'null' && result.toString().length > 2) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('maqr_local_storage', result.toString());
+        print('💾 [ACCOUNT] Đã lưu localStorage (${result.toString().length} chars)');
+      }
+    } catch (e) {
+      print('❌ [ACCOUNT] Lỗi lưu localStorage: $e');
+    }
+  }
+
+  /// Inject JavaScript để phát hiện click vào nút đăng xuất và xóa cookies.
+  Future<void> _injectLogoutDetectorJS(InAppWebViewController controller) async {
+    try {
+      await controller.evaluateJavascript(source: '''
+        (function() {
+          if (window.__logoutDetectorInjected) return;
+          window.__logoutDetectorInjected = true;
+
+          function attachLogoutListener() {
+            var btns = document.querySelectorAll('a[ng-click="cl_dangxuat()"]');
+            btns.forEach(function(btn) {
+              if (!btn.__logoutListenerAttached) {
+                btn.__logoutListenerAttached = true;
+                btn.addEventListener('click', function() {
+                  console.log('[LOGOUT] Nut dang xuat duoc nhan');
+                  if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                    window.flutter_inappwebview.callHandler('onLogout');
+                  }
+                }, true);
+                console.log('[LOGOUT] Da gan listener vao nut dang xuat');
+              }
+            });
+          }
+
+          attachLogoutListener();
+
+          var observer = new MutationObserver(function() {
+            attachLogoutListener();
+          });
+          observer.observe(document.body || document.documentElement, {
+            childList: true,
+            subtree: true
+          });
+
+          console.log('[LOGOUT] Logout detector injected');
+        })();
+      ''');
+      print('✅ [ACCOUNT] Đã inject logout detector JS');
+    } catch (e) {
+      print('❌ [ACCOUNT] Lỗi inject logout detector JS: \$e');
+    }
   }
 
   /// Inject JavaScript vào trang để phát hiện gesture kéo xuống ngay cả khi
